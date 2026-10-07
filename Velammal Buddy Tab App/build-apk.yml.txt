@@ -1,0 +1,76 @@
+# Builds the Velammal Buddy tablet app (APK) on GitHub's servers.
+# Runs automatically whenever files are uploaded. When it finishes, the APK
+# appears under "Releases" on the right side of the repository page.
+name: Build Velammal Buddy APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the app files are uploaded
+        id: check
+        run: |
+          if [ -f settings.gradle ] && [ -f app/build.gradle ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "App files not uploaded yet - nothing to build."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          gradle-version: '8.9'
+
+      - name: Build the APK
+        id: build
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace --no-daemon 2>&1 | tee build-log.txt
+
+      - name: Save the build log if something went wrong
+        if: failure() && steps.check.outputs.ready == 'true'
+        run: |
+          git config user.name "velammal-buddy-builder"
+          git config user.email "builder@users.noreply.github.com"
+          tail -n 300 build-log.txt > build-log-latest.txt
+          git add build-log-latest.txt
+          git commit -m "Build log (failed build ${{ github.run_number }}) [skip ci]"
+          git push
+
+      - name: Rename the APK
+        if: steps.check.outputs.ready == 'true'
+        run: cp app/build/outputs/apk/debug/app-debug.apk VelammalBuddy.apk
+
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          name: VelammalBuddy-APK
+          path: VelammalBuddy.apk
+
+      - name: Publish the APK as a release
+        if: steps.check.outputs.ready == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" VelammalBuddy.apk \
+            --title "Velammal Buddy (build ${{ github.run_number }})" \
+            --notes "Download VelammalBuddy.apk and install it on the tablet." \
+            --latest

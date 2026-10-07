@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Velammal Buddy</title>
+  <link rel="icon" href="assets/velammal-logo.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<!-- data-state is changed by script.js: idle | listening | speaking -->
+<body data-state="idle">
+
+  <!-- Colourful animated background (only visible around the phone on a laptop) -->
+  <div class="scene" aria-hidden="true">
+    <span class="blob blob-1"></span><span class="blob blob-2"></span>
+    <span class="blob blob-3"></span><span class="blob blob-4"></span>
+  </div>
+
+  <!-- ====================================================================
+       PHONE FRAME
+       On a laptop the app is shown inside a phone. On a real phone or
+       tablet it simply fills the screen like a native app.
+       ==================================================================== -->
+  <div class="device">
+    <div class="device-notch" aria-hidden="true"></div>
+
+    <div class="app" id="app">
+
+      <!-- Fake phone status bar (laptop view only) -->
+      <div class="status-bar" aria-hidden="true">
+        <span id="clock">9:41</span>
+        <span class="sb-icons">
+          <svg viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>
+          <svg viewBox="0 0 16 12"><path d="M8 2.2c2.4 0 4.6.9 6.2 2.5l1.3-1.3A10.6 10.6 0 0 0 8 .4 10.6 10.6 0 0 0 .5 3.4l1.3 1.3A8.8 8.8 0 0 1 8 2.2Zm0 3.6c1.4 0 2.7.5 3.7 1.5L13 6a7 7 0 0 0-10 0l1.3 1.3c1-1 2.3-1.5 3.7-1.5Zm0 3.6c.5 0 1 .2 1.3.5L8 11.6 6.7 9.9c.3-.3.8-.5 1.3-.5Z"/></svg>
+          <svg viewBox="0 0 27 12"><rect x="0.5" y="0.5" width="22" height="11" rx="3.5" fill="none" stroke="currentColor" opacity="0.45"/><rect x="2" y="2" width="17" height="8" rx="2"/><rect x="24" y="4" width="2" height="4" rx="1" opacity="0.45"/></svg>
+        </span>
+      </div>
+
+      <!-- ================================================================
+           APP BAR: LOGO + NAME + TAGLINE
+           Logo file: assets/velammal-logo.png  (replace to change it)
+           Tip: press and hold the logo for 2 seconds to open the hidden
+           Demo Backup Mode on a tablet or phone.
+           ================================================================ -->
+      <header class="app-bar">
+        <div class="logo-wrap" id="logoWrap">
+          <img id="schoolLogo" class="school-logo" src="assets/velammal-logo.png" alt="Velammal logo" draggable="false">
+          <div class="logo-fallback" aria-hidden="true">V</div>
+        </div>
+        <div class="brand">
+          <h1 class="brand-name">Velammal <span>Buddy</span></h1>
+          <p class="brand-tagline">Learn. Ask. Grow. Anytime!</p>
+        </div>
+        <div class="pill" aria-hidden="true"><i></i><span id="pillText">Online</span></div>
+        <span class="rehearsed-dot" aria-hidden="true"></span>
+      </header>
+
+      <!-- ================================================================
+           HERO: ROBOT + STATUS
+           (big in the middle at first, shrinks to the top once chatting)
+           ================================================================ -->
+      <section class="hero" aria-label="Velammal Buddy">
+        <div class="sparkles" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+
+        <div class="robot-stage">
+          <div class="halo halo-1"></div>
+          <div class="halo halo-2"></div>
+          <div class="halo halo-3"></div>
+
+          <div class="side-waves left" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+          <div class="side-waves right" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+
+          <div class="robot">
+            <!-- ==========================================================
+                 OPTIONAL ROBOT IMAGE: put a picture at assets/robot.png
+                 and it replaces the drawn robot automatically.
+                 ========================================================== -->
+            <img id="robotImage" class="robot-image" src="assets/robot.png" alt="Velammal Buddy robot" draggable="false">
+
+            <!-- BUILT-IN ROBOT (SVG): glossy 3D-style robot drawn in code -->
+            <svg class="robot-svg" viewBox="0 0 240 268" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Velammal Buddy robot">
+              <defs>
+                <!-- Glossy white shell: light from top-left, shade bottom-right -->
+                <radialGradient id="gShell" cx="0.32" cy="0.22" r="0.95">
+                  <stop offset="0" stop-color="#ffffff"/>
+                  <stop offset="0.45" stop-color="#f1f4fa"/>
+                  <stop offset="0.8" stop-color="#cfd6e4"/>
+                  <stop offset="1" stop-color="#a9b3c8"/>
+                </radialGradient>
+                <radialGradient id="gShellBody" cx="0.3" cy="0.15" r="1">
+                  <stop offset="0" stop-color="#ffffff"/>
+                  <stop offset="0.5" stop-color="#eef1f7"/>
+                  <stop offset="0.85" stop-color="#c6cede"/>
+                  <stop offset="1" stop-color="#9ea9c0"/>
+                </radialGradient>
+                <!-- Brushed metal for joints and neck -->
+                <linearGradient id="gMetal" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#5b6479"/>
+                  <stop offset="0.25" stop-color="#c9d0dd"/>
+                  <stop offset="0.5" stop-color="#f4f6fa"/>
+                  <stop offset="0.75" stop-color="#9aa3b6"/>
+                  <stop offset="1" stop-color="#4a5266"/>
+                </linearGradient>
+                <radialGradient id="gSphere" cx="0.35" cy="0.3" r="0.75">
+                  <stop offset="0" stop-color="#f7f9fc"/>
+                  <stop offset="0.45" stop-color="#a6afc2"/>
+                  <stop offset="1" stop-color="#3f4658"/>
+                </radialGradient>
+                <!-- Dark glass visor -->
+                <linearGradient id="gVisor" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#27304f"/>
+                  <stop offset="0.55" stop-color="#0c1022"/>
+                  <stop offset="1" stop-color="#05070f"/>
+                </linearGradient>
+                <radialGradient id="gVisorGlow" cx="0.5" cy="0.55" r="0.6">
+                  <stop offset="0" stop-color="#22d3ee" stop-opacity="0.22"/>
+                  <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+                </radialGradient>
+                <linearGradient id="gVisorRim" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#7d869b"/>
+                  <stop offset="1" stop-color="#2d3345"/>
+                </linearGradient>
+                <!-- LED eyes -->
+                <linearGradient id="gEye" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#e6fdff"/>
+                  <stop offset="0.45" stop-color="#67e8f9"/>
+                  <stop offset="1" stop-color="#06b6d4"/>
+                </linearGradient>
+                <radialGradient id="gCore" cx="0.5" cy="0.5" r="0.5">
+                  <stop offset="0" stop-color="#ffffff"/>
+                  <stop offset="0.35" stop-color="#a5f3fc"/>
+                  <stop offset="0.7" stop-color="#22d3ee"/>
+                  <stop offset="1" stop-color="#0e7490"/>
+                </radialGradient>
+                <radialGradient id="gBulb" cx="0.35" cy="0.3" r="0.7">
+                  <stop offset="0" stop-color="#fff7d6"/>
+                  <stop offset="0.5" stop-color="#f5b800"/>
+                  <stop offset="1" stop-color="#b45309"/>
+                </radialGradient>
+                <linearGradient id="gGold" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#b7791f"/>
+                  <stop offset="0.5" stop-color="#fcd34d"/>
+                  <stop offset="1" stop-color="#b7791f"/>
+                </linearGradient>
+                <radialGradient id="gThruster" cx="0.5" cy="0.5" r="0.5">
+                  <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.95"/>
+                  <stop offset="0.5" stop-color="#22d3ee" stop-opacity="0.45"/>
+                  <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+                </radialGradient>
+
+                <filter id="fGlow" x="-80%" y="-80%" width="260%" height="260%">
+                  <feGaussianBlur stdDeviation="3" result="blur"/>
+                  <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+                <filter id="fSoft" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="2.5"/>
+                </filter>
+                <filter id="fDepth" x="-20%" y="-20%" width="140%" height="150%">
+                  <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#1e1b4b" flood-opacity="0.28"/>
+                </filter>
+
+                <clipPath id="cVisor">
+                  <rect x="60" y="52" width="120" height="78" rx="36"/>
+                </clipPath>
+              </defs>
+
+              <!-- Hover thruster glow under the body -->
+              <ellipse class="hover-glow" cx="120" cy="252" rx="34" ry="9" fill="url(#gThruster)"/>
+
+              <!-- ============ ARMS (behind the body) ============ -->
+              <g class="arm arm-left">
+                <circle cx="66" cy="176" r="12" fill="url(#gSphere)"/>
+                <rect x="47" y="178" width="22" height="30" rx="11" fill="url(#gShellBody)" stroke="#b8c1d3" stroke-width="1"/>
+                <rect x="50" y="205" width="16" height="7" rx="3.5" fill="url(#gMetal)"/>
+                <rect x="47" y="210" width="22" height="22" rx="11" fill="url(#gShellBody)" stroke="#b8c1d3" stroke-width="1"/>
+                <circle cx="58" cy="236" r="10" fill="url(#gSphere)"/>
+                <path d="M52 238 q6 6 12 0" stroke="#3f4658" stroke-width="1.5" fill="none" opacity="0.5"/>
+              </g>
+              <g class="arm arm-right">
+                <circle cx="174" cy="176" r="12" fill="url(#gSphere)"/>
+                <rect x="171" y="178" width="22" height="30" rx="11" fill="url(#gShellBody)" stroke="#b8c1d3" stroke-width="1"/>
+                <rect x="174" y="205" width="16" height="7" rx="3.5" fill="url(#gMetal)"/>
+                <rect x="171" y="210" width="22" height="22" rx="11" fill="url(#gShellBody)" stroke="#b8c1d3" stroke-width="1"/>
+                <circle cx="182" cy="236" r="10" fill="url(#gSphere)"/>
+                <path d="M176 238 q6 6 12 0" stroke="#3f4658" stroke-width="1.5" fill="none" opacity="0.5"/>
+              </g>
+
+              <!-- ============ BODY ============ -->
+              <g class="torso" filter="url(#fDepth)">
+                <path d="M78 166 Q78 160 86 160 H154 Q162 160 162 166 L166 214 Q166 246 120 248 Q74 246 74 214 Z"
+                      fill="url(#gShellBody)" stroke="#b8c1d3" stroke-width="1.2"/>
+                <!-- panel seam lines -->
+                <path d="M84 222 Q120 232 156 222" stroke="#aab4c7" stroke-width="1.2" fill="none"/>
+                <!-- Velammal gold belt -->
+                <path d="M77 206 Q120 216 163 206 L163.6 212 Q120 222 76.4 212 Z" fill="url(#gGold)" opacity="0.95"/>
+                <!-- chest glass panel -->
+                <rect x="96" y="170" width="48" height="32" rx="14" fill="url(#gVisor)" stroke="#6b7389" stroke-width="1.5"/>
+                <circle class="chest-light" cx="120" cy="186" r="10" fill="url(#gCore)" filter="url(#fGlow)"/>
+                <path d="M120 191.5 C112 186 113.5 179.5 117.5 180.8 C118.8 181.2 119.6 182.2 120 183.2 C120.4 182.2 121.2 181.2 122.5 180.8 C126.5 179.5 128 186 120 191.5 Z" fill="#ffffff"/>
+                <path d="M100 174 Q108 171 116 172" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round" fill="none"/>
+                <!-- glossy highlight -->
+                <ellipse cx="96" cy="222" rx="10" ry="16" fill="#ffffff" opacity="0.55" filter="url(#fSoft)"/>
+                <!-- bottom emitter -->
+                <rect x="108" y="242" width="24" height="6" rx="3" fill="#1f2638"/>
+                <rect x="111" y="243.5" width="18" height="3" rx="1.5" fill="#67e8f9" opacity="0.9"/>
+              </g>
+
+              <!-- ============ NECK ============ -->
+              <rect x="106" y="144" width="28" height="20" rx="6" fill="url(#gMetal)"/>
+              <rect x="106" y="150" width="28" height="2" fill="#3f4658" opacity="0.45"/>
+              <rect x="106" y="156" width="28" height="2" fill="#3f4658" opacity="0.45"/>
+              <!-- contact shadow under the head -->
+              <ellipse cx="120" cy="162" rx="36" ry="5" fill="#1e1b4b" opacity="0.18" filter="url(#fSoft)"/>
+
+              <!-- ============ HEAD ============ -->
+              <g class="head">
+                <!-- Antenna -->
+                <rect x="117" y="14" width="6" height="22" rx="3" fill="url(#gMetal)"/>
+                <circle cx="120" cy="34" r="6" fill="url(#gSphere)"/>
+                <circle class="antenna-bulb" cx="120" cy="12" r="7" fill="url(#gBulb)" filter="url(#fGlow)"/>
+
+                <!-- Ear sensors -->
+                <g class="ear ear-left">
+                  <circle cx="44" cy="92" r="17" fill="url(#gSphere)"/>
+                  <circle cx="44" cy="92" r="11" fill="#1a2033" stroke="#8b94a8" stroke-width="1.5"/>
+                  <circle class="ear-light" cx="44" cy="92" r="6" fill="#67e8f9" filter="url(#fGlow)"/>
+                </g>
+                <g class="ear ear-right">
+                  <circle cx="196" cy="92" r="17" fill="url(#gSphere)"/>
+                  <circle cx="196" cy="92" r="11" fill="#1a2033" stroke="#8b94a8" stroke-width="1.5"/>
+                  <circle class="ear-light" cx="196" cy="92" r="6" fill="#67e8f9" filter="url(#fGlow)"/>
+                </g>
+
+                <!-- Helmet shell -->
+                <g filter="url(#fDepth)">
+                  <rect x="44" y="32" width="152" height="118" rx="52" fill="url(#gShell)" stroke="#b8c1d3" stroke-width="1.2"/>
+                </g>
+                <!-- shell highlight + seam -->
+                <ellipse cx="82" cy="46" rx="26" ry="8" fill="#ffffff" opacity="0.9" filter="url(#fSoft)" transform="rotate(-14 82 46)"/>
+                <path d="M66 140 Q120 152 174 140" stroke="#b3bdd0" stroke-width="1.2" fill="none"/>
+
+                <!-- Visor -->
+                <rect x="57" y="49" width="126" height="84" rx="39" fill="url(#gVisorRim)"/>
+                <rect x="60" y="52" width="120" height="78" rx="36" fill="url(#gVisor)"/>
+                <rect x="60" y="52" width="120" height="78" rx="36" fill="url(#gVisorGlow)"/>
+
+                <!-- Eyes (LED capsules) -->
+                <g class="eyes">
+                  <rect x="82" y="74" width="22" height="30" rx="11" fill="#22d3ee" opacity="0.55" filter="url(#fSoft)"/>
+                  <rect x="136" y="74" width="22" height="30" rx="11" fill="#22d3ee" opacity="0.55" filter="url(#fSoft)"/>
+                  <rect x="84" y="76" width="18" height="26" rx="9" fill="url(#gEye)"/>
+                  <rect x="138" y="76" width="18" height="26" rx="9" fill="url(#gEye)"/>
+                  <ellipse cx="89" cy="82" rx="3" ry="4" fill="#ffffff" opacity="0.95"/>
+                  <ellipse cx="143" cy="82" rx="3" ry="4" fill="#ffffff" opacity="0.95"/>
+                </g>
+
+                <!-- Cheek LEDs -->
+                <ellipse cx="74" cy="110" rx="6" ry="3.5" fill="#f472b6" opacity="0.55" filter="url(#fSoft)"/>
+                <ellipse cx="166" cy="110" rx="6" ry="3.5" fill="#f472b6" opacity="0.55" filter="url(#fSoft)"/>
+
+                <!-- Mouth: LED smile (idle/listening) and talking mouth (speaking) -->
+                <path class="mouth-smile" d="M109 112 Q120 120 131 112" stroke="#67e8f9" stroke-width="4" stroke-linecap="round" fill="none" filter="url(#fGlow)"/>
+                <ellipse class="mouth-talk" cx="120" cy="115" rx="10" ry="6" fill="#67e8f9" filter="url(#fGlow)"/>
+
+                <!-- Glass reflections (a shine sweeps across every few seconds) -->
+                <g clip-path="url(#cVisor)">
+                  <path d="M64 70 Q78 52 112 54 L104 62 Q80 62 70 78 Z" fill="#ffffff" opacity="0.22"/>
+                  <g class="visor-shine"><rect x="40" y="40" width="18" height="110" fill="#ffffff" opacity="0.16" transform="skewX(-20)"/></g>
+                </g>
+                <circle cx="166" cy="64" r="2.5" fill="#ffffff" opacity="0.6"/>
+              </g>
+            </svg>
+          </div>
+
+          <div class="robot-shadow"></div>
+        </div>
+
+        <div class="status-bubble" id="statusBubble" role="status" aria-live="polite">
+          <span class="mini-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <p id="statusText" class="status-text">Hi Gugan! What would you like to learn today?</p>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           CHAT: every question and answer stays here until the page
+           is refreshed.
+           ================================================================ -->
+      <section class="chat" id="chat" aria-live="polite" aria-label="Conversation"></section>
+
+      <!-- ================================================================
+           BOTTOM DOCK: the one big Talk button
+           ================================================================ -->
+      <footer class="dock">
+        <div class="talk-wrap">
+          <span class="talk-glow" aria-hidden="true"></span>
+          <button id="talkButton" class="talk-button" type="button" aria-label="Tap to Talk">
+            <span class="ring ring-1" aria-hidden="true"></span>
+            <span class="ring ring-2" aria-hidden="true"></span>
+            <svg class="icon icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="2.5" width="6" height="12" rx="3" fill="#ffffff"/>
+              <path d="M5.5 11a6.5 6.5 0 0 0 13 0" stroke="#ffffff" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <line x1="12" y1="17.5" x2="12" y2="21" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+              <line x1="8.5" y1="21" x2="15.5" y2="21" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="7" y="7" width="10" height="10" rx="2.5" fill="#ffffff"/>
+            </svg>
+          </button>
+        </div>
+        <p id="talkLabel" class="talk-label">Tap to Talk</p>
+      </footer>
+
+      <!-- ================================================================
+           SPLASH SCREEN (plays once when the app opens; tap to skip)
+           ================================================================ -->
+      <div class="splash" id="splash">
+        <div class="splash-rings" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="splash-logo"><img src="assets/velammal-logo.png" alt="Velammal logo" draggable="false"></div>
+        <h2 class="splash-title">Velammal <span>Buddy</span></h2>
+        <p class="splash-tagline">Learn. Ask. Grow. Anytime!</p>
+        <div class="splash-loader" aria-hidden="true"><i></i></div>
+      </div>
+
+      <!-- ================================================================
+           HIDDEN DEMO BACKUP MODE
+           Open with CTRL + D (laptop) or press-and-hold the logo for 2 s.
+           ================================================================ -->
+      <aside id="devPanel" class="dev-panel" hidden aria-label="Demo backup mode">
+        <div class="dev-sheet" role="dialog" aria-modal="true" aria-labelledby="devTitle">
+          <div class="dev-grabber" aria-hidden="true"></div>
+          <div class="dev-header">
+            <strong id="devTitle">Demo Backup Mode</strong>
+            <button id="devClose" class="dev-close" type="button" aria-label="Close">&times;</button>
+          </div>
+
+          <p class="dev-info" id="devInfo">Checking…</p>
+
+          <label class="dev-toggle">
+            <input type="checkbox" id="devRehearsed">
+            <span>
+              <b>Rehearsed mode</b> — the Talk button plays the questions below in order,
+              without using the microphone (works offline). Tap Talk again to skip ahead.
+              <em id="devNext"></em>
+            </span>
+          </label>
+
+          <p class="dev-subtitle">Tap a question to make Buddy answer it:</p>
+          <div id="devQuestions" class="dev-questions"></div>
+
+          <p class="dev-subtitle">Maths quiz backup (answers for Gugan):</p>
+          <div class="dev-tools quiz-tools">
+            <button id="devQuizRight" type="button">Quiz: say correct answer</button>
+            <button id="devQuizWrong" type="button">Quiz: say wrong answer</button>
+          </div>
+
+          <div class="dev-tools">
+            <button id="devInstall" type="button" hidden>Set up offline listening</button>
+            <button id="devVoiceSettings" type="button">Offline speech settings</button>
+            <button id="devTestVoice" type="button">Test voice</button>
+            <button id="devResetOrder" type="button">Restart order</button>
+            <button id="devStop" type="button">Stop Buddy</button>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+
+  <!-- Tablet app only: connects Buddy to the tablet's offline listening and voice -->
+  <script src="android-bridge.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
