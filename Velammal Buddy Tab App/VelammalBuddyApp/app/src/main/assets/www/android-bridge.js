@@ -19,6 +19,41 @@
   var activeRecognition = null;
   var currentId = 0;
 
+  /* Two ways to listen:
+     "service" = quiet background listening (normal)
+     "popup"   = Google's "Speak now" pop-up (very reliable on older tablets)
+     "auto"    = try "service"; if the tablet's speech engine does not answer
+                 within a few seconds, switch to "popup" by itself. */
+  var MODE_KEY = "velammalBuddy.listenMode";
+  var START_TIMEOUT_MS = 4000;     // engine must say "ready" within this time
+  var STOP_TIMEOUT_MS = 4000;      // after "stop", it must finish within this time
+  var MAX_LISTEN_MS = 15000;       // never listen longer than this in one go
+
+  function readMode() {
+    try { return localStorage.getItem(MODE_KEY) || "auto"; } catch (e) { return "auto"; }
+  }
+  function saveMode(mode) {
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ }
+  }
+  var listenMode = readMode();          // what the user chose
+  var serviceWorks = null;              // null = unknown yet, true/false once known
+
+  /* A short history of what the speech engine did (shown in the backup panel) */
+  var speechLog = [];
+  function log(text) {
+    var t = new Date();
+    var stamp = ("0" + t.getMinutes()).slice(-2) + ":" + ("0" + t.getSeconds()).slice(-2);
+    speechLog.push(stamp + "  " + text);
+    if (speechLog.length > 14) speechLog.shift();
+    if (typeof window.__onSpeechLog === "function") {
+      try { window.__onSpeechLog(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function usePopup() {
+    return listenMode === "popup" || (listenMode === "auto" && serviceWorks === false);
+  }
+
   function makeResult(texts, isFinal) {
     var result = texts.map(function (t) { return { transcript: t, confidence: 0.9 }; });
     result.isFinal = isFinal;
@@ -33,8 +68,15 @@
     }
   }
 
+  function clearTimers(rec) {
+    clearTimeout(rec._startTimer);
+    clearTimeout(rec._stopTimer);
+    clearTimeout(rec._maxTimer);
+  }
+
   function finishSession(rec) {
     if (!rec._running) return;
+    clearTimers(rec);
     rec._running = false;
     if (activeRecognition === rec) activeRecognition = null;
     fire(rec, "end", {});
@@ -58,19 +100,71 @@
       throw err;
     }
     if (activeRecognition && activeRecognition !== this) activeRecognition.abort();
-    this._running = true;
-    this._id = ++currentId;
-    activeRecognition = this;
-    bridge.startListening(this._id, this.lang || "en-IN", !!this.interimResults, this.maxAlternatives || 3);
+    var rec = this;
+    rec._running = true;
+    rec._id = ++currentId;
+    rec._gotReady = false;
+    rec._gotResult = false;
+    activeRecognition = rec;
+    var lang = rec.lang || "en-IN";
+
+    if (usePopup()) {
+      log("listen #" + rec._id + " using Google pop-up");
+      rec._popup = true;
+      window.__androidSpeech.popupActive = true;
+      bridge.startListeningPopup(rec._id, lang);
+      return;                                   // the pop-up has its own timing
+    }
+
+    rec._popup = false;
+    log("listen #" + rec._id + " using background engine");
+    bridge.startListening(rec._id, lang, !!rec.interimResults, rec.maxAlternatives || 3);
+
+    // Safety net 1: the engine must answer quickly
+    rec._startTimer = setTimeout(function () {
+      if (!rec._running || rec._gotReady || rec._id !== currentId) return;
+      log("engine did not answer in " + (START_TIMEOUT_MS / 1000) + " s");
+      bridge.abortListening();
+      if (listenMode === "auto") {
+        // Switch to Google's pop-up for the rest of the session
+        serviceWorks = false;
+        log("switching to Google pop-up");
+        rec._popup = true;
+        rec._id = ++currentId;
+        window.__androidSpeech.popupActive = true;
+        bridge.startListeningPopup(rec._id, lang);
+      } else {
+        fire(rec, "error", { error: "service-not-allowed" });
+        finishSession(rec);
+      }
+    }, START_TIMEOUT_MS);
+
+    // Safety net 2: never listen forever
+    rec._maxTimer = setTimeout(function () {
+      if (rec._running && !rec._popup) rec.stop();
+    }, MAX_LISTEN_MS);
   };
 
   AndroidSpeechRecognition.prototype.stop = function () {
-    if (this._running) bridge.stopListening();
+    if (!this._running) return;
+    var rec = this;
+    if (rec._popup) return;                     // the pop-up finishes by itself
+    bridge.stopListening();
+    // Safety net 3: if the engine never reports back, finish anyway
+    clearTimeout(rec._stopTimer);
+    rec._stopTimer = setTimeout(function () {
+      if (!rec._running) return;
+      log("engine did not finish - moving on");
+      bridge.abortListening();
+      fire(rec, "error", { error: "no-speech" });
+      finishSession(rec);
+    }, STOP_TIMEOUT_MS);
   };
 
   AndroidSpeechRecognition.prototype.abort = function () {
     if (!this._running) return;
     var rec = this;
+    clearTimers(rec);
     currentId++;                              // ignore anything still coming from Android
     bridge.abortListening();
     setTimeout(function () {
@@ -83,20 +177,49 @@
   AndroidSpeechRecognition.prototype.removeEventListener = function () {};
 
   window.__androidSpeech = {
+    popupActive: false,
+    getLog: function () { return speechLog.slice(); },
+    getMode: function () { return listenMode; },
+    getStatus: function () {
+      if (listenMode === "popup") return "Google pop-up (chosen)";
+      if (listenMode === "service") return "background engine (chosen)";
+      if (serviceWorks === false) return "auto: using Google pop-up (background engine did not answer)";
+      if (serviceWorks === true) return "auto: background engine works";
+      return "auto: not tested yet";
+    },
+    setMode: function (mode) {
+      listenMode = mode;
+      saveMode(mode);
+      if (mode === "auto") serviceWorks = null;
+      log("listening mode set to " + mode);
+    },
     onEvent: function (id, type, data) {
+      if (type !== "partial") log("#" + id + " " + type + (data && type !== "results" ? " (" + data + ")" : ""));
+      else log("#" + id + " heard: " + String(data).slice(0, 40));
+      if (type === "results") log("#" + id + " result: " + String(data).slice(0, 60));
       var rec = activeRecognition;
       if (!rec || id !== currentId || id !== rec._id) return;
       if (type === "start") {
+        if (!rec._popup) {
+          rec._gotReady = true;
+          clearTimeout(rec._startTimer);
+          serviceWorks = true;
+        }
+        window.__androidSpeech.popupActive = !!rec._popup;
         fire(rec, "start", {});
+      } else if (type === "begin" || type === "endspeech" || type === "diag") {
+        // information only
       } else if (type === "partial") {
         if (rec.interimResults && data) fire(rec, "result", { resultIndex: 0, results: [makeResult([data], false)] });
       } else if (type === "results") {
+        rec._gotResult = true;
         var list = [];
         try { list = JSON.parse(data || "[]"); } catch (e) { list = []; }
         if (list.length) fire(rec, "result", { resultIndex: 0, results: [makeResult(list, true)] });
       } else if (type === "error") {
         fire(rec, "error", { error: data || "unknown" });
       } else if (type === "end") {
+        window.__androidSpeech.popupActive = false;
         finishSession(rec);
       }
     }

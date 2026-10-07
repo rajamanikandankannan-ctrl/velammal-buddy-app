@@ -1620,10 +1620,44 @@ function bindEvents() {
     });
   }
 
-  // If the tab is hidden while Buddy is busy, stop cleanly (the chat stays)
+  // If the tab is hidden while Buddy is busy, stop cleanly (the chat stays).
+  // (Not while Google's "Speak now" pop-up is open in the tablet app.)
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden && state.mode !== "idle") resetToIdle();
+    const popupOpen = window.__androidSpeech && window.__androidSpeech.popupActive;
+    if (document.hidden && state.mode !== "idle" && !popupOpen) resetToIdle();
   });
+
+  setupTabletSpeechPanel();
+}
+
+/** Tablet app only: shows how listening is working, and lets you pick the mode. */
+function setupTabletSpeechPanel() {
+  const box = document.getElementById("devSpeechBox");
+  if (!box || !window.__androidSpeech || !window.AndroidBuddy) return;
+  box.hidden = false;
+  const statusEl = document.getElementById("devSpeechStatus");
+  const logEl = document.getElementById("devSpeechLog");
+  const buttons = box.querySelectorAll("[data-listen-mode]");
+
+  function render() {
+    let info = "";
+    try { info = window.AndroidBuddy.getSpeechInfo(); } catch (e) { info = ""; }
+    statusEl.textContent = "Mode: " + window.__androidSpeech.getStatus() + (info ? "  •  " + info : "");
+    const lines = window.__androidSpeech.getLog();
+    logEl.textContent = lines.length ? lines.join("\n") : "No listening yet. Tap 'Tap to Talk' and ask a question.";
+    const mode = window.__androidSpeech.getMode();
+    buttons.forEach(function (b) { b.classList.toggle("is-on", b.getAttribute("data-listen-mode") === mode); });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      window.__androidSpeech.setMode(b.getAttribute("data-listen-mode"));
+      render();
+    });
+  });
+  window.__onSpeechLog = function () { if (state.devOpen) render(); };
+  const originalOpen = openDevPanel;
+  openDevPanel = function () { originalOpen(); render(); };
 }
 
 /** Lite mode for older, slower devices (e.g. Galaxy Tab A 8.0). */

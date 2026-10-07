@@ -721,3 +721,13 @@ body.lite .pill i { animation: none; }
 body.lite .msg-bot.speaking .bubble { animation: none; border-color: rgba(16, 185, 129, 0.45); }
 body.lite .splash-rings i:nth-child(n+2) { display: none; }
 body.lite .chat { box-shadow: none; }
+
+/* Tablet app: listening diagnostics in the backup panel */
+.dev-speech { margin-top: 12px; }
+.dev-modes { margin-top: 6px; }
+.dev-modes button.is-on { background: #eef2ff; border-color: #6366f1; color: #3730a3; }
+.dev-log {
+  margin: 8px 0 0; padding: 8px 10px; max-height: 150px; overflow-y: auto;
+  background: #0f172a; color: #a5f3fc; border-radius: 10px;
+  font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap;
+}

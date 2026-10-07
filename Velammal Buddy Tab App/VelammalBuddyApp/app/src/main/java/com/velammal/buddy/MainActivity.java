@@ -4,9 +4,11 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -15,6 +17,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.speech.RecognitionListener;
+import android.speech.RecognitionService;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
@@ -49,6 +52,8 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 
     private static final int REQUEST_MIC = 101;
+    private static final int REQUEST_SPEECH_POPUP = 102;
+    private static final String GOOGLE_APP = "com.google.android.googlequicksearchbox";
     /** Hide the short "beep" Android plays when the microphone turns on. */
     private static final boolean HIDE_MIC_BEEP = true;
     /** Oldest built-in browser engine (WebView) that runs Buddy properly. */
@@ -59,6 +64,9 @@ public class MainActivity extends Activity {
     private WebView webView;
     private SpeechRecognizer recognizer;
     private int currentListenId = -1;
+    private String recognizerName = "default";
+    private int popupListenId = -1;
+    private boolean popupActive = false;
     private AudioManager audio;
     private boolean beepMuted = false;
 
@@ -208,7 +216,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (recognizer == null) {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            recognizer = createBestRecognizer();
         } else {
             recognizer.cancel();
         }
@@ -236,6 +244,116 @@ public class MainActivity extends Activity {
             speechEvent(id, "error", "audio-capture");
             speechEvent(id, "end", null);
         }
+    }
+
+    /** Prefer Google's speech engine (works offline with the English pack);
+     *  Samsung's own engine on some tablets never answers. */
+    private SpeechRecognizer createBestRecognizer() {
+        ComponentName google = findRecognitionService(GOOGLE_APP);
+        if (google != null) {
+            recognizerName = google.flattenToShortString();
+            return SpeechRecognizer.createSpeechRecognizer(this, google);
+        }
+        recognizerName = "default (" + describeDefaultRecognizer() + ")";
+        return SpeechRecognizer.createSpeechRecognizer(this);
+    }
+
+    private ComponentName findRecognitionService(String preferredPackage) {
+        try {
+            List<ResolveInfo> services = getPackageManager().queryIntentServices(
+                    new Intent(RecognitionService.SERVICE_INTERFACE), 0);
+            if (services == null) return null;
+            for (ResolveInfo info : services) {
+                if (info.serviceInfo != null && preferredPackage.equals(info.serviceInfo.packageName)) {
+                    return new ComponentName(info.serviceInfo.packageName, info.serviceInfo.name);
+                }
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private String describeDefaultRecognizer() {
+        try {
+            String value = Settings.Secure.getString(getContentResolver(), "voice_recognition_service");
+            return value == null ? "unknown" : value;
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    private String listRecognitionServices() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            List<ResolveInfo> services = getPackageManager().queryIntentServices(
+                    new Intent(RecognitionService.SERVICE_INTERFACE), 0);
+            if (services != null) {
+                for (ResolveInfo info : services) {
+                    if (info.serviceInfo == null) continue;
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(info.serviceInfo.packageName);
+                }
+            }
+        } catch (Exception ignored) { }
+        return sb.length() == 0 ? "none" : sb.toString();
+    }
+
+    private String appVersion(String pkg) {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(pkg, 0);
+            return info.versionName;
+        } catch (Exception e) {
+            return "not installed";
+        }
+    }
+
+    /** Fallback: Google's own "Speak now" pop-up. Very reliable on older Android. */
+    private void startListeningPopup(int id, String lang) {
+        if (!hasMicPermission()) {
+            speechEvent(id, "error", "not-allowed");
+            speechEvent(id, "end", null);
+            askForMicrophone();
+            return;
+        }
+        abortListening();
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Ask Buddy a question");
+        if (Build.VERSION.SDK_INT >= 23) intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+        try {
+            popupListenId = id;
+            popupActive = true;
+            startActivityForResult(intent, REQUEST_SPEECH_POPUP);
+            speechEvent(id, "start", null);
+        } catch (Exception e) {
+            popupActive = false;
+            popupListenId = -1;
+            speechEvent(id, "error", "service-not-allowed");
+            speechEvent(id, "end", null);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_SPEECH_POPUP) return;
+        int id = popupListenId;
+        popupActive = false;
+        popupListenId = -1;
+        if (id < 0) return;
+        ArrayList<String> list = (resultCode == RESULT_OK && data != null)
+                ? data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS) : null;
+        JSONArray array = new JSONArray();
+        if (list != null) {
+            for (String text : list) {
+                if (text != null && !text.trim().isEmpty()) array.put(text);
+            }
+        }
+        if (array.length() > 0) speechEvent(id, "results", array.toString());
+        else speechEvent(id, "error", resultCode == RESULT_CANCELED ? "aborted" : "no-speech");
+        speechEvent(id, "end", null);
     }
 
     private void stopListening() {
@@ -302,10 +420,14 @@ public class MainActivity extends Activity {
             main.postDelayed(() -> muteBeep(false), 700);
         }
 
-        @Override public void onBeginningOfSpeech() { }
+        @Override public void onBeginningOfSpeech() {
+            if (!stale()) speechEvent(id, "begin", null);
+        }
         @Override public void onRmsChanged(float rmsdB) { }
         @Override public void onBufferReceived(byte[] buffer) { }
-        @Override public void onEndOfSpeech() { }
+        @Override public void onEndOfSpeech() {
+            if (!stale()) speechEvent(id, "endspeech", null);
+        }
         @Override public void onEvent(int eventType, Bundle params) { }
 
         @Override public void onPartialResults(Bundle partialResults) {
@@ -335,6 +457,7 @@ public class MainActivity extends Activity {
             if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
                 resetRecognizer();   // start fresh next time
             }
+            speechEvent(id, "diag", "android error " + error);
             speechEvent(id, "error", errorName(error));
             endSession();
         }
@@ -437,6 +560,20 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void startListeningPopup(final int id, final String lang) {
+            main.post(() -> MainActivity.this.startListeningPopup(id, lang));
+        }
+
+        @JavascriptInterface
+        public String getSpeechInfo() {
+            return "Engine in use: " + recognizerName
+                    + " | Tablet default: " + describeDefaultRecognizer()
+                    + " | Engines found: " + listRecognitionServices()
+                    + " | Google app: " + appVersion(GOOGLE_APP)
+                    + " | Android " + Build.VERSION.RELEASE;
+        }
+
+        @JavascriptInterface
         public boolean isRecognitionAvailable() {
             return SpeechRecognizer.isRecognitionAvailable(MainActivity.this);
         }
@@ -467,10 +604,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
-        abortListening();
-        stopSpeaking();
         muteBeep(false);
-        if (webView != null) webView.onPause();
+        if (!popupActive) {           // Google's pop-up briefly pauses the app - keep going
+            abortListening();
+            stopSpeaking();
+            if (webView != null) webView.onPause();
+        }
         super.onPause();
     }
 

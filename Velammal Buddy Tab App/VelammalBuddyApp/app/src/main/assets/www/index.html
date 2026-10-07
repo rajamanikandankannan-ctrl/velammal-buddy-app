@@ -350,6 +350,17 @@
             </span>
           </label>
 
+          <div id="devSpeechBox" class="dev-speech" hidden>
+            <p class="dev-subtitle">Tablet listening:</p>
+            <p class="dev-info" id="devSpeechStatus"></p>
+            <div class="dev-tools dev-modes">
+              <button type="button" data-listen-mode="auto">Auto (recommended)</button>
+              <button type="button" data-listen-mode="popup">Google pop-up</button>
+              <button type="button" data-listen-mode="service">Background</button>
+            </div>
+            <pre id="devSpeechLog" class="dev-log"></pre>
+          </div>
+
           <p class="dev-subtitle">Tap a question to make Buddy answer it:</p>
           <div id="devQuestions" class="dev-questions"></div>
 
