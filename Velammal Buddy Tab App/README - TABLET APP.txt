@@ -87,3 +87,18 @@ LISTENING ON THE TABLET (version 2.0)
      what Buddy heard, step by step.
    - Updates install straight over the old app (fixed signing key in
      buddy-release.keystore - keep this file in the folder).
+
+REHEARSED MODE (hold the logo 2 s -> tick "Rehearsed mode")
+   "Rehearsed mode" (checkbox) - Gugan's presentation order:
+     1 Why do plants need sunlight   2 "I goed to the park yesterday"
+     3 Biryani in school             4 Western Music sir
+     5 Health Center                 6 Chief Minister of Tamil Nadu
+     7 Goodbye                       then all the other questions.
+   - Buddy STILL LISTENS and answers whatever Gugan actually asks.
+   - If Buddy hears something but can't understand it, he answers the next
+     question in this order (so the show never gets stuck).
+   - Tap Talk while Buddy is listening = jump straight to the next answer.
+   - If the microphone/internet fails, the questions play in order by
+     themselves (the question types itself on screen).
+   - The question buttons in this panel are listed in the same order.
+   - A tiny grey dot in the header shows Rehearsed mode is on.

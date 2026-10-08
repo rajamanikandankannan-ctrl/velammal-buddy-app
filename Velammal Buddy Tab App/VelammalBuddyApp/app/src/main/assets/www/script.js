@@ -52,7 +52,15 @@ const CONFIG = {
   offlineLanguages: ["en-IN", "en-US", "en-GB"],
 
   // Rehearsed mode (see Demo Backup Mode): order of question ids to play
-  rehearsedOrder: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 15, 17],
+  // Gugan's presentation order:
+  //  1 plants & sunlight, 2 "I goed to the park" (English correction),
+  //  12 biryani, 13 Western Music sir, 14 Health Center, 16 Chief Minister,
+  //  17 goodbye - then all the other questions.
+  rehearsedOrder: [1, 2, 12, 13, 14, 16, 17, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15],
+  // Rehearsed mode LISTENS to Gugan and answers what he asks. Only if Buddy
+  // can't understand (or listening isn't possible) does he answer the next
+  // question in the order above. Set to false to never use the microphone.
+  rehearsedListens: true,
   rehearsedStartDelayMs: 900,    // wait before the question starts appearing
   rehearsedWordDelayMs: 320,     // speed at which the question "types" itself
 
@@ -423,6 +431,7 @@ const state = {
   rehearsedSession: 0,
   rehearsedTimer: null,
   rehearsedItem: null,
+  rehearsedListening: false,      // Rehearsed mode is using the microphone
 
   lastKidEl: null,              // Gugan's most recent chat bubble
 
@@ -491,6 +500,12 @@ function setStatus(message, isError) {
 
 /** Show a friendly problem message, then go back to the greeting. */
 function showFriendlyError(message) {
+  if (state.rehearsedMode && state.rehearsedListening && state.mode === "listening") {
+    // Listening failed (no internet, no microphone...) - keep the show going
+    state.rehearsedListening = false;
+    answerNextScripted();
+    return;
+  }
   endConversation();
   discardLiveMessage();
   setMode("idle", message, true);
@@ -885,7 +900,7 @@ function setupOfflineListening() {
 /* ---------------- Conversation mode ---------------- */
 
 function startConversation() {
-  state.conversationOn = CONFIG.keepListening && !state.rehearsedMode;
+  state.conversationOn = CONFIG.keepListening && (!state.rehearsedMode || state.rehearsedListening);
   state.silenceSince = Date.now();
 }
 
@@ -898,7 +913,7 @@ function endConversation() {
 
 /** After Buddy finishes an answer, start listening again by himself. */
 function continueConversation() {
-  if (!state.conversationOn || state.rehearsedMode || state.devOpen || document.hidden) return;
+  if (!state.conversationOn || (state.rehearsedMode && !state.rehearsedListening) || state.devOpen || document.hidden) return;
   clearTimeout(state.listenAgainTimer);
   state.listenAgainTimer = setTimeout(function () {
     if (!state.conversationOn || state.mode !== "idle") return;
@@ -1008,7 +1023,48 @@ function handleQuestion(transcript, alternatives) {
     handleQuizAnswer(candidates);
     return;
   }
+
+  if (state.rehearsedMode) {
+    if (match) {
+      alignRehearsedOrder(match);       // keep the script in step with Gugan
+    } else {
+      // Heard something but could not understand it - answer the next one
+      const item = getRehearsedItem();
+      state.rehearsedIndex++;
+      updateRehearsedHint();
+      // Show the scripted question instead of the words that were misheard
+      if (state.lastKidEl) state.lastKidEl.querySelector(".text").textContent = item.question;
+      else commitKidMessage(item.question);
+      respondToItem(item);
+      return;
+    }
+  }
   respondToItem(match);
+}
+
+/** After Gugan asks a question from the script, the "next" one follows it. */
+function alignRehearsedOrder(item) {
+  const order = CONFIG.rehearsedOrder;
+  const position = order.indexOf(item.id);
+  if (position >= 0) state.rehearsedIndex = position + 1;
+  updateRehearsedHint();
+}
+
+/** Rehearsed mode safety net: answer the next question in the presentation order. */
+function answerNextScripted() {
+  abortListening();
+  cancelRehearsed();
+  if (state.quiz.active) {
+    const answer = String(state.quiz.questions[state.quiz.index].answer);
+    commitKidMessage(answer);
+    handleQuizAnswer([answer]);
+    return;
+  }
+  const item = getRehearsedItem();
+  state.rehearsedIndex++;
+  updateRehearsedHint();
+  commitKidMessage(item.question);
+  respondToItem(item);
 }
 
 /** Buddy replies to a matched question (or says he hasn't learned it yet). */
@@ -1292,9 +1348,22 @@ function stopSpeaking() {
    Close: the × button, ESC, or tap outside the panel.
    ========================================================================= */
 
+/** Questions in presentation order (rehearsedOrder first, then any others). */
+function questionsInPresentationOrder() {
+  const ordered = [];
+  CONFIG.rehearsedOrder.forEach(function (id) {
+    const item = knowledgeBase.find(function (q) { return q.id === id; });
+    if (item && ordered.indexOf(item) === -1) ordered.push(item);
+  });
+  knowledgeBase.forEach(function (item) {
+    if (ordered.indexOf(item) === -1) ordered.push(item);
+  });
+  return ordered;
+}
+
 function buildDevPanel() {
   els.devQuestions.textContent = "";
-  knowledgeBase.forEach(function (item, index) {
+  questionsInPresentationOrder().forEach(function (item, index) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "dev-q";
@@ -1460,7 +1529,12 @@ function onTalkButton() {
   warmUpSpeech();
 
   if (state.mode === "listening") {
-    if (state.rehearsedMode) { finishRehearsedTurn(); return; }
+    if (state.rehearsedMode) {
+      // Tap while Buddy is listening = answer the next question in the order
+      if (state.rehearsedListening) answerNextScripted();
+      else finishRehearsedTurn();
+      return;
+    }
     // Tap while listening = stop the conversation
     endConversation();
     abortListening();
@@ -1476,7 +1550,17 @@ function onTalkButton() {
     return;
   }
 
-  if (state.rehearsedMode) { startRehearsedTurn(); return; }
+  if (state.rehearsedMode) {
+    if (CONFIG.rehearsedListens && state.recognitionSupported) {
+      state.rehearsedListening = true;   // listen for real, script is the backup
+      startConversation();
+      startListening();
+    } else {
+      state.rehearsedListening = false;  // no microphone: play the script
+      startRehearsedTurn();
+    }
+    return;
+  }
   startConversation();
   startListening();
 }
@@ -1592,6 +1676,7 @@ function bindEvents() {
 
   els.devRehearsed.addEventListener("change", function () {
     state.rehearsedMode = els.devRehearsed.checked;
+    state.rehearsedListening = false;
     document.body.classList.toggle("rehearsed-mode", state.rehearsedMode);
     updateRehearsedHint();
   });
