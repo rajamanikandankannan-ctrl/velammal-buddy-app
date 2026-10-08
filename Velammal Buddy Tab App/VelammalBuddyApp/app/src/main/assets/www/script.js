@@ -188,8 +188,10 @@ const knowledgeBase = [
     category: "My School",
     question: "Can I get biryani in school?",
     answer: "No, we don't have biryani. But you can get a yummy samosa from the school canteen!",
-    keywords: ["biryani|biriyani|briyani|biriani|beriyani|biryan|biriyan"],
-    minMatches: 1
+    // Tablet app: the built-in engine may not know the word "biryani",
+    // so "can I get ... in school" also counts.
+    keywords: ["biryani|biriyani|briyani|biriani|beriyani|biryan|biriyan", "get|eat|have|food", "school|canteen"],
+    minMatches: 2
   },
   {
     id: 13,
@@ -213,7 +215,8 @@ const knowledgeBase = [
     category: "General Knowledge",
     question: "Who is the Chief Minister of Tamil Nadu?",
     answer: "The Chief Minister of Tamil Nadu is Thiru C. Joseph Vijay. He became the Chief Minister on the 10th of May, 2026.",
-    keywords: ["chief minister|chief|cm|c m", "tamil nadu|tamilnadu|tamil|nadu"]
+    keywords: ["chief minister|chief|cm|c m", "tamil nadu|tamilnadu|tamil|nadu"],
+    minMatches: 1   // tablet app: "Tamil Nadu" may not be in the built-in engine's words
   },
 
   /* ---------------- GOODBYE ----------------

@@ -10,18 +10,92 @@ android {
         applicationId 'com.velammal.buddy'
         minSdk 24          // Android 7.0 and newer (your Galaxy Tab has 8.1)
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '2.0'
+        ndk {
+            // Phones and tablets (32-bit and 64-bit ARM) + emulators
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+    }
+
+    // One fixed key, so every new version installs straight over the old one
+    signingConfigs {
+        buddy {
+            storeFile rootProject.file('buddy-release.keystore')
+            storePassword 'velammalbuddy'
+            keyAlias 'buddy'
+            keyPassword 'velammalbuddy'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.buddy
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.buddy
         }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            // Buddy's built-in offline speech model is added here during the build
+            assets.srcDirs += "$buildDir/generated/vosk-assets"
+        }
+    }
+}
+
+dependencies {
+    // Vosk: free offline speech recognition that runs inside the app
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    implementation 'com.alphacephei:vosk-android:0.3.47@aar'
+}
+
+// ---------------------------------------------------------------------------
+// Downloads Buddy's offline English speech model (about 40 MB) during the
+// build and places it inside the app. Nothing is downloaded on the tablet.
+// ---------------------------------------------------------------------------
+def voskModelName = 'vosk-model-small-en-us-0.15'
+def voskModelDir = file("$buildDir/generated/vosk-assets/model-en-us")
+
+tasks.register('downloadVoskModel') {
+    outputs.dir(voskModelDir)
+    doLast {
+        if (new File(voskModelDir, 'uuid').exists()) return
+        def zipFile = new File(buildDir, "${voskModelName}.zip")
+        if (!zipFile.exists()) {
+            zipFile.parentFile.mkdirs()
+            println "Downloading ${voskModelName}..."
+            new URL("https://alphacephei.com/vosk/models/${voskModelName}.zip").withInputStream { input ->
+                zipFile.withOutputStream { output -> output << input }
+            }
+        }
+        def unpackDir = new File(buildDir, "tmp/vosk-unpack")
+        project.delete(unpackDir)
+        project.copy {
+            from project.zipTree(zipFile)
+            into unpackDir
+        }
+        project.delete(voskModelDir)
+        project.copy {
+            from new File(unpackDir, voskModelName)
+            into voskModelDir
+        }
+        // A new id makes the app unpack the model again after an update
+        new File(voskModelDir, 'uuid').text = UUID.randomUUID().toString()
+        println "Speech model ready in ${voskModelDir}"
+    }
+}
+
+tasks.configureEach { task ->
+    def n = task.name.toLowerCase()
+    if (task.name != 'downloadVoskModel' && (task.name == 'preBuild' || n.contains('assets') || n.contains('lint'))) {
+        task.dependsOn('downloadVoskModel')
     }
 }

@@ -50,6 +50,48 @@
     }
   }
 
+  /* Buddy's built-in engine listens only for Buddy's words (much more accurate
+     for a child's voice). The words are taken from the questions in script.js. */
+  var vocabularySent = false;
+  var EXTRA_WORDS = (
+    "hello hi hey buddy velammal what is the a an are was were why how who where when which " +
+    "can could do does did i me my you your we our it this that these those there here " +
+    "in on at of to for from with and or not no yes please thank thanks tell about give " +
+    "have has get go went play played school teacher class today tomorrow yesterday " +
+    "sentence correct right wrong answer question quiz maths math test stop start again " +
+    "bye goodbye good night see later morning name many much more " +
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen " +
+    "fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy " +
+    "eighty ninety hundred plus minus times divided by into multiply"
+  ).split(" ");
+
+  function sendVocabulary() {
+    if (vocabularySent || typeof bridge.setVocabulary !== "function") return;
+    var words = {};
+    function addText(text) {
+      String(text || "").toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).forEach(function (w) {
+        if (w) words[w] = true;
+      });
+    }
+    EXTRA_WORDS.forEach(addText);
+    try {
+      if (typeof knowledgeBase !== "undefined") {
+        knowledgeBase.forEach(function (item) {
+          addText(item.question);
+          (item.keywords || []).forEach(function (k) { addText(String(k).replace(/\|/g, " ")); });
+        });
+      }
+      if (typeof quizQuestions !== "undefined") {
+        quizQuestions.forEach(function (q) { addText(q.question); });
+      }
+    } catch (e) { /* use the extra words only */ }
+    var list = Object.keys(words);
+    list.push("[unk]");
+    bridge.setVocabulary(JSON.stringify(list));
+    vocabularySent = true;
+    log("sent " + (list.length - 1) + " words to the built-in engine");
+  }
+
   function usePopup() {
     return listenMode === "popup" || (listenMode === "auto" && serviceWorks === false);
   }
@@ -107,6 +149,7 @@
     rec._gotResult = false;
     activeRecognition = rec;
     var lang = rec.lang || "en-IN";
+    sendVocabulary();
 
     if (usePopup()) {
       log("listen #" + rec._id + " using Google pop-up");
@@ -176,11 +219,21 @@
   AndroidSpeechRecognition.prototype.addEventListener = function () {};
   AndroidSpeechRecognition.prototype.removeEventListener = function () {};
 
+  var engineState = "loading";
+  try { engineState = bridge.getEngineState ? bridge.getEngineState() : "failed"; } catch (e) { engineState = "failed"; }
+
   window.__androidSpeech = {
     popupActive: false,
+    getEngineState: function () { return engineState; },
+    onEngine: function (stateName) {
+      engineState = stateName;
+      log("built-in engine " + stateName);
+    },
     getLog: function () { return speechLog.slice(); },
     getMode: function () { return listenMode; },
     getStatus: function () {
+      if (engineState === "ready" && listenMode !== "popup") return "Buddy's built-in offline engine (ready)";
+      if (engineState === "loading" && listenMode !== "popup") return "Buddy's built-in engine is getting ready…";
       if (listenMode === "popup") return "Google pop-up (chosen)";
       if (listenMode === "service") return "background engine (chosen)";
       if (serviceWorks === false) return "auto: using Google pop-up (background engine did not answer)";

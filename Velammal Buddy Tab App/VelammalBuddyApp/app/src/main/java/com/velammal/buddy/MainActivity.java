@@ -33,6 +33,10 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.vosk.Model;
+import org.vosk.Recognizer;
+import org.vosk.android.SpeechService;
+import org.vosk.android.StorageService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -46,6 +50,8 @@ import java.util.Locale;
  *   1. LISTENING  - Android's own speech recogniser, asked to work OFFLINE
  *                   (needs the free "offline speech" English pack, see README).
  *   2. SPEAKING   - the tablet's built-in text-to-speech voice.
+ * LISTENING uses Buddy's OWN built-in offline speech engine (Vosk) first, so
+ * it works even on tablets without Google voice search and without internet.
  * The page talks to this code through the "AndroidBuddy" bridge
  * (see assets/www/android-bridge.js).
  */
@@ -69,6 +75,17 @@ public class MainActivity extends Activity {
     private boolean popupActive = false;
     private AudioManager audio;
     private boolean beepMuted = false;
+
+    // Buddy's built-in offline speech engine (Vosk)
+    private Model voskModel;
+    private boolean voskLoading = false;
+    private String voskStatus = "not loaded";
+    private SpeechService voskService;
+    private Recognizer voskRecognizer;
+    private String voskGrammar = null;     // Buddy's words, sent by the page
+    private int voskListenId = -1;
+    private int pendingVoskId = -1;
+    private String voskLastPartial = "";
 
     private TextToSpeech tts;
     private boolean ttsReady = false;
@@ -107,6 +124,7 @@ public class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/www/index.html");
 
         setupTextToSpeech();
+        loadVoskModel();
         askForMicrophone();
         checkWebViewVersion();
     }
@@ -208,6 +226,10 @@ public class MainActivity extends Activity {
             speechEvent(id, "error", "not-allowed");
             speechEvent(id, "end", null);
             askForMicrophone();
+            return;
+        }
+        if (voskModel != null || voskLoading) {
+            startVosk(id);
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -357,13 +379,190 @@ public class MainActivity extends Activity {
     }
 
     private void stopListening() {
+        if (pendingVoskId >= 0) {                 // engine still loading - give up this round
+            int id = pendingVoskId;
+            pendingVoskId = -1;
+            speechEvent(id, "error", "no-speech");
+            speechEvent(id, "end", null);
+            return;
+        }
+        if (voskService != null) {
+            voskService.stop();                   // Vosk then reports its final result
+            return;
+        }
         if (recognizer != null) recognizer.stopListening();
     }
 
     private void abortListening() {
         currentListenId = -1;
+        pendingVoskId = -1;
+        voskListenId = -1;
+        stopVosk();
         if (recognizer != null) recognizer.cancel();
         muteBeep(false);
+    }
+
+    // ------------------------------------------------------------------
+    // BUDDY'S OWN OFFLINE SPEECH ENGINE (Vosk)
+    // ------------------------------------------------------------------
+
+    /** Unpacks the speech model that is stored inside the app (first launch takes a little while). */
+    private void loadVoskModel() {
+        if (voskModel != null || voskLoading) return;
+        voskLoading = true;
+        voskStatus = "getting ready";
+        try {
+            StorageService.unpack(this, "model-en-us", "model",
+                    model -> {
+                        voskModel = model;
+                        voskLoading = false;
+                        voskStatus = "ready";
+                        runJs("window.__androidSpeech && window.__androidSpeech.onEngine('ready')");
+                        if (pendingVoskId >= 0) {
+                            int id = pendingVoskId;
+                            pendingVoskId = -1;
+                            startVosk(id);
+                        }
+                    },
+                    error -> voskFailed("could not unpack: " + error.getMessage()));
+        } catch (Throwable t) {
+            voskFailed(t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    private void voskFailed(String why) {
+        voskLoading = false;
+        voskModel = null;
+        voskStatus = "failed (" + why + ")";
+        runJs("window.__androidSpeech && window.__androidSpeech.onEngine('failed')");
+        if (pendingVoskId >= 0) {
+            int id = pendingVoskId;
+            pendingVoskId = -1;
+            speechEvent(id, "diag", "built-in engine " + voskStatus);
+            speechEvent(id, "error", "service-not-allowed");
+            speechEvent(id, "end", null);
+        }
+    }
+
+    private void startVosk(int id) {
+        stopVosk();
+        if (voskModel == null) {
+            if (voskLoading) {                    // start as soon as the engine is ready
+                pendingVoskId = id;
+                speechEvent(id, "start", null);
+                speechEvent(id, "diag", "built-in engine getting ready");
+                return;
+            }
+            speechEvent(id, "error", "service-not-allowed");
+            speechEvent(id, "end", null);
+            return;
+        }
+        voskListenId = id;
+        voskLastPartial = "";
+        try {
+            voskRecognizer = createVoskRecognizer();
+            voskService = new SpeechService(voskRecognizer, 16000.0f);
+            voskService.startListening(new VoskListener(id), 12000);
+            speechEvent(id, "start", null);
+            speechEvent(id, "diag", "built-in engine listening");
+        } catch (Throwable t) {
+            stopVosk();
+            voskListenId = -1;
+            speechEvent(id, "diag", "built-in engine error: " + t.getMessage());
+            speechEvent(id, "error", "audio-capture");
+            speechEvent(id, "end", null);
+        }
+    }
+
+    /** Listens only for Buddy's words when the page has sent them - much more accurate. */
+    private Recognizer createVoskRecognizer() throws java.io.IOException {
+        if (voskGrammar != null) {
+            try {
+                return new Recognizer(voskModel, 16000.0f, voskGrammar);
+            } catch (Throwable ignored) {
+                // fall back to free listening
+            }
+        }
+        return new Recognizer(voskModel, 16000.0f);
+    }
+
+    private void stopVosk() {
+        if (voskService != null) {
+            try { voskService.stop(); } catch (Throwable ignored) { }
+            try { voskService.shutdown(); } catch (Throwable ignored) { }
+            voskService = null;
+        }
+        if (voskRecognizer != null) {
+            try { voskRecognizer.close(); } catch (Throwable ignored) { }
+            voskRecognizer = null;
+        }
+    }
+
+    private static String voskText(String json, String key) {
+        try {
+            String text = new JSONObject(json).optString(key, "");
+            return text.replace("[unk]", " ").replaceAll("\\s+", " ").trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Receives what Buddy's own engine hears. */
+    private class VoskListener implements org.vosk.android.RecognitionListener {
+        private final int id;
+        private boolean done = false;
+
+        VoskListener(int id) { this.id = id; }
+
+        private boolean stale() { return done || id != voskListenId; }
+
+        private void finish(String text) {
+            done = true;
+            voskListenId = -1;
+            main.post(MainActivity.this::stopVosk);
+            if (text != null && !text.trim().isEmpty()) {
+                speechEvent(id, "results", new JSONArray().put(text.trim()).toString());
+            } else {
+                speechEvent(id, "error", "no-speech");
+            }
+            speechEvent(id, "end", null);
+        }
+
+        @Override public void onPartialResult(String hypothesis) {
+            if (stale()) return;
+            String text = voskText(hypothesis, "partial");
+            if (!text.isEmpty() && !text.equals(voskLastPartial)) {
+                voskLastPartial = text;
+                speechEvent(id, "partial", text);
+            }
+        }
+
+        @Override public void onResult(String hypothesis) {
+            if (stale()) return;
+            String text = voskText(hypothesis, "text");
+            if (!text.isEmpty()) finish(text);   // a full sentence was heard
+        }
+
+        @Override public void onFinalResult(String hypothesis) {
+            if (stale()) return;
+            String text = voskText(hypothesis, "text");
+            finish(text.isEmpty() ? voskLastPartial : text);
+        }
+
+        @Override public void onError(Exception e) {
+            if (stale()) return;
+            done = true;
+            voskListenId = -1;
+            main.post(MainActivity.this::stopVosk);
+            speechEvent(id, "diag", "built-in engine error: " + (e == null ? "" : e.getMessage()));
+            speechEvent(id, "error", "audio-capture");
+            speechEvent(id, "end", null);
+        }
+
+        @Override public void onTimeout() {
+            if (stale()) return;
+            finish(voskLastPartial);
+        }
     }
 
     private void resetRecognizer() {
@@ -564,9 +763,21 @@ public class MainActivity extends Activity {
             main.post(() -> MainActivity.this.startListeningPopup(id, lang));
         }
 
+        /** The page sends Buddy's words so the built-in engine listens for them. */
+        @JavascriptInterface
+        public void setVocabulary(final String jsonArrayOfWords) {
+            main.post(() -> voskGrammar = jsonArrayOfWords);
+        }
+
+        @JavascriptInterface
+        public String getEngineState() {
+            return voskModel != null ? "ready" : (voskLoading ? "loading" : "failed");
+        }
+
         @JavascriptInterface
         public String getSpeechInfo() {
-            return "Engine in use: " + recognizerName
+            return "Built-in engine: " + voskStatus
+                    + " | Google engine: " + recognizerName
                     + " | Tablet default: " + describeDefaultRecognizer()
                     + " | Engines found: " + listRecognitionServices()
                     + " | Google app: " + appVersion(GOOGLE_APP)
@@ -623,6 +834,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         muteBeep(false);
+        stopVosk();
         resetRecognizer();
         if (tts != null) {
             tts.stop();

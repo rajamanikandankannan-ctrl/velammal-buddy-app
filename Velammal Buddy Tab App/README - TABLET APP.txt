@@ -5,8 +5,9 @@ This folder is SEPARATE from the laptop version. Nothing in the laptop files
 was changed. Inside the app, Buddy works WITHOUT INTERNET:
   - Buddy's screens, answers, quiz, goodbye  -> stored inside the app
   - Buddy's voice                              -> the tablet's own voice (offline)
-  - Listening to Gugan                         -> Android's offline speech recogniser
-                                                  (needs a free one-time download, step B)
+  - Listening to Gugan                         -> Buddy's OWN built-in offline speech
+                                                  engine (inside the app - no Google,
+                                                  no internet, no download needed)
 
 WHAT'S IN THIS FOLDER
   VelammalBuddyApp/                    the Android app project (source)
@@ -31,7 +32,7 @@ A. GET THE APP (APK) BUILT — one time
 B. ONE-TIME TABLET SETUP (with Wi-Fi ON)
    1. Play Store: update "Google", "Google Chrome" and
       "Android System WebView" (if listed).
-   2. Download the OFFLINE English speech pack:
+   2. (Optional, only a backup now) Google's offline English speech pack:
         Settings > General management > Language and input >
         On-screen keyboard (or "Virtual keyboard") > Google voice typing >
         Offline speech recognition > ALL tab > download "English (India)"
@@ -74,3 +75,15 @@ GOOD TO KNOW
        VelammalBuddyApp/app/src/main/assets/www/script.js
      (same "2. KNOWLEDGE BASE" section as the laptop), then build the APK
      again and re-install it (your settings stay).
+
+
+LISTENING ON THE TABLET (version 2.0)
+   - Buddy has his own speech engine inside the app. It listens for Buddy's
+     words (the questions, quiz numbers, goodbye), which makes it accurate.
+   - The very first time the app opens, it unpacks the engine (about 20-40
+     seconds on an older tablet). After that it starts instantly.
+   - New questions you add to script.js are learned automatically.
+   - Hold the logo 2 s -> "Tablet listening" shows the engine status and
+     what Buddy heard, step by step.
+   - Updates install straight over the old app (fixed signing key in
+     buddy-release.keystore - keep this file in the folder).
