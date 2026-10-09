@@ -60,8 +60,11 @@ public class MainActivity extends Activity {
     private static final int REQUEST_MIC = 101;
     private static final int REQUEST_SPEECH_POPUP = 102;
     private static final String GOOGLE_APP = "com.google.android.googlequicksearchbox";
-    /** Hide the short "beep" Android plays when the microphone turns on. */
-    private static final boolean HIDE_MIC_BEEP = true;
+    /** Muting sounds to hide the microphone "beep" could leave the tablet silent
+     *  if the app was closed at the wrong moment - so it is switched off. */
+    private static final boolean HIDE_MIC_BEEP = false;
+    /** Voice engines to try if the tablet's default one does not start. */
+    private static final String[] TTS_ENGINES = {null, "com.google.android.tts", "com.samsung.SMT"};
     /** Oldest built-in browser engine (WebView) that runs Buddy properly. */
     private static final int MIN_WEBVIEW_MAJOR = 110;
 
@@ -89,6 +92,8 @@ public class MainActivity extends Activity {
 
     private TextToSpeech tts;
     private boolean ttsReady = false;
+    private int ttsEngineIndex = 0;
+    private String ttsStatus = "starting";
     private final List<String[]> waitingToSpeak = new ArrayList<>();
 
     // ------------------------------------------------------------------
@@ -123,6 +128,7 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new Bridge(), "AndroidBuddy");
         webView.loadUrl("file:///android_asset/www/index.html");
 
+        ensureSoundOn();
         setupTextToSpeech();
         loadVoskModel();
         askForMicrophone();
@@ -683,30 +689,86 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------
 
     private void setupTextToSpeech() {
-        tts = new TextToSpeech(this, status -> {
-            if (status != TextToSpeech.SUCCESS) return;
-            int result = tts.setLanguage(new Locale("en", "IN"));
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                tts.setLanguage(Locale.US);
+        final String engine = TTS_ENGINES[ttsEngineIndex];
+        TextToSpeech.OnInitListener onInit = status -> main.post(() -> onTextToSpeechReady(status, engine));
+        try {
+            tts = (engine == null) ? new TextToSpeech(this, onInit) : new TextToSpeech(this, onInit, engine);
+        } catch (Exception e) {
+            onTextToSpeechReady(TextToSpeech.ERROR, engine);
+        }
+    }
+
+    private void onTextToSpeechReady(int status, String engine) {
+        String name = engine == null ? "default voice" : engine;
+        if (status != TextToSpeech.SUCCESS) {
+            // Try the next voice engine (Google, then Samsung)
+            try { if (tts != null) tts.shutdown(); } catch (Exception ignored) { }
+            ttsEngineIndex++;
+            if (ttsEngineIndex < TTS_ENGINES.length) {
+                ttsStatus = name + " failed, trying another";
+                setupTextToSpeech();
+            } else {
+                ttsStatus = "NO voice engine works - install 'Speech Services by Google' from Play Store";
             }
-            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                @Override public void onStart(String utteranceId) { ttsEvent(utteranceId, "start"); }
-                @Override public void onDone(String utteranceId) { ttsEvent(utteranceId, "done"); }
-                @Override public void onError(String utteranceId) { ttsEvent(utteranceId, "error"); }
-                @Override public void onError(String utteranceId, int errorCode) { ttsEvent(utteranceId, "error"); }
-            });
-            main.post(() -> {
-                ttsReady = true;
-                for (String[] item : waitingToSpeak) {
-                    speakNow(item[0], item[1], Float.parseFloat(item[2]), Float.parseFloat(item[3]));
-                }
-                waitingToSpeak.clear();
-            });
+            return;
+        }
+        int result = tts.setLanguage(new Locale("en", "IN"));
+        String lang = "English (India)";
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            result = tts.setLanguage(Locale.US);
+            lang = "English (US)";
+        }
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            result = tts.setLanguage(Locale.UK);
+            lang = "English (UK)";
+        }
+        ttsStatus = name + ", " + lang + (result < 0 ? " (voice data missing!)" : " ok");
+        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+            @Override public void onStart(String utteranceId) { ttsEvent(utteranceId, "start"); }
+            @Override public void onDone(String utteranceId) { ttsEvent(utteranceId, "done"); }
+            @Override public void onError(String utteranceId) { ttsEvent(utteranceId, "error"); }
+            @Override public void onError(String utteranceId, int errorCode) { ttsEvent(utteranceId, "error"); }
         });
+        ttsReady = true;
+        for (String[] item : waitingToSpeak) {
+            speakNow(item[0], item[1], Float.parseFloat(item[2]), Float.parseFloat(item[3]));
+        }
+        waitingToSpeak.clear();
+    }
+
+    /** Makes sure the tablet's media sound is on and loud enough for Buddy's voice. */
+    private void ensureSoundOn() {
+        if (audio == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                // Undo any mute left behind by an older version of the app
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
+            }
+            int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int now = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+            if (now < max * 0.4) {
+                audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(max * 0.7f), 0);
+            }
+        } catch (Exception ignored) {
+            // e.g. Do Not Disturb is on
+        }
+    }
+
+    private String soundInfo() {
+        if (audio == null) return "unknown";
+        try {
+            int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int now = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+            boolean muted = Build.VERSION.SDK_INT >= 23 && audio.isStreamMute(AudioManager.STREAM_MUSIC);
+            return now + "/" + max + (muted ? " MUTED" : "");
+        } catch (Exception e) {
+            return "unknown";
+        }
     }
 
     private void speak(String id, String text, float rate, float pitch) {
         muteBeep(false);
+        ensureSoundOn();
         if (!ttsReady) {
             waitingToSpeak.add(new String[]{id, text, String.valueOf(rate), String.valueOf(pitch)});
             return;
@@ -776,7 +838,9 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String getSpeechInfo() {
-            return "Built-in engine: " + voskStatus
+            return "Voice: " + ttsStatus
+                    + " | Media volume: " + soundInfo()
+                    + " | Built-in engine: " + voskStatus
                     + " | Google engine: " + recognizerName
                     + " | Tablet default: " + describeDefaultRecognizer()
                     + " | Engines found: " + listRecognitionServices()
@@ -827,6 +891,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        ensureSoundOn();
         if (webView != null) webView.onResume();
         hideSystemBars();
     }
