@@ -22,6 +22,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -64,7 +65,7 @@ public class MainActivity extends Activity {
      *  if the app was closed at the wrong moment - so it is switched off. */
     private static final boolean HIDE_MIC_BEEP = false;
     /** Voice engines to try if the tablet's default one does not start. */
-    private static final String[] TTS_ENGINES = {null, "com.google.android.tts", "com.samsung.SMT"};
+    private static final String[] TTS_ENGINES = {"com.google.android.tts", null, "com.samsung.SMT"};
     /** Oldest built-in browser engine (WebView) that runs Buddy properly. */
     private static final int MIN_WEBVIEW_MAJOR = 110;
 
@@ -94,6 +95,10 @@ public class MainActivity extends Activity {
     private boolean ttsReady = false;
     private int ttsEngineIndex = 0;
     private String ttsStatus = "starting";
+    private String ttsEngineName = "";
+    private boolean ttsEngineWorks = false;                   // this engine has really spoken
+    private final java.util.LinkedHashMap<String, String[]> ttsPending = new java.util.LinkedHashMap<>();
+    private final java.util.HashSet<String> ttsStarted = new java.util.HashSet<>();
     private final List<String[]> waitingToSpeak = new ArrayList<>();
 
     // ------------------------------------------------------------------
@@ -688,52 +693,146 @@ public class MainActivity extends Activity {
     // SPEAKING (tablet's built-in voice, works offline)
     // ------------------------------------------------------------------
 
+    /** Starts a voice engine: Google first, then the tablet's default, then Samsung. */
     private void setupTextToSpeech() {
+        // Skip engines that are not installed
+        while (ttsEngineIndex < TTS_ENGINES.length && TTS_ENGINES[ttsEngineIndex] != null
+                && "not installed".equals(appVersion(TTS_ENGINES[ttsEngineIndex]))) {
+            ttsEngineIndex++;
+        }
+        if (ttsEngineIndex >= TTS_ENGINES.length) {
+            noVoiceWorks();
+            return;
+        }
         final String engine = TTS_ENGINES[ttsEngineIndex];
-        TextToSpeech.OnInitListener onInit = status -> main.post(() -> onTextToSpeechReady(status, engine));
+        ttsEngineName = engine == null ? "tablet default voice" : engine;
+        ttsEngineWorks = false;
+        voiceDiag("starting voice engine: " + ttsEngineName);
+        TextToSpeech.OnInitListener onInit = status -> main.post(() -> onTextToSpeechReady(status));
         try {
             tts = (engine == null) ? new TextToSpeech(this, onInit) : new TextToSpeech(this, onInit, engine);
         } catch (Exception e) {
-            onTextToSpeechReady(TextToSpeech.ERROR, engine);
+            onTextToSpeechReady(TextToSpeech.ERROR);
         }
     }
 
-    private void onTextToSpeechReady(int status, String engine) {
-        String name = engine == null ? "default voice" : engine;
+    private void onTextToSpeechReady(int status) {
         if (status != TextToSpeech.SUCCESS) {
-            // Try the next voice engine (Google, then Samsung)
-            try { if (tts != null) tts.shutdown(); } catch (Exception ignored) { }
-            ttsEngineIndex++;
-            if (ttsEngineIndex < TTS_ENGINES.length) {
-                ttsStatus = name + " failed, trying another";
-                setupTextToSpeech();
-            } else {
-                ttsStatus = "NO voice engine works - install 'Speech Services by Google' from Play Store";
-            }
+            nextVoiceEngine("could not start");
             return;
         }
-        int result = tts.setLanguage(new Locale("en", "IN"));
-        String lang = "English (India)";
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            result = tts.setLanguage(Locale.US);
-            lang = "English (US)";
-        }
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            result = tts.setLanguage(Locale.UK);
-            lang = "English (UK)";
-        }
-        ttsStatus = name + ", " + lang + (result < 0 ? " (voice data missing!)" : " ok");
+        String voice = chooseInstalledEnglishVoice();
+        ttsStatus = ttsEngineName + " - " + voice;
+        voiceDiag("voice ready: " + ttsStatus);
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String utteranceId) { ttsEvent(utteranceId, "start"); }
-            @Override public void onDone(String utteranceId) { ttsEvent(utteranceId, "done"); }
-            @Override public void onError(String utteranceId) { ttsEvent(utteranceId, "error"); }
-            @Override public void onError(String utteranceId, int errorCode) { ttsEvent(utteranceId, "error"); }
+            @Override public void onStart(String id) { main.post(() -> onVoiceStarted(id)); }
+            @Override public void onDone(String id) { main.post(() -> onVoiceDone(id)); }
+            @Override public void onError(String id) { main.post(() -> onVoiceError(id, -1)); }
+            @Override public void onError(String id, int errorCode) { main.post(() -> onVoiceError(id, errorCode)); }
         });
         ttsReady = true;
-        for (String[] item : waitingToSpeak) {
+        List<String[]> queued = new ArrayList<>(waitingToSpeak);
+        waitingToSpeak.clear();
+        for (String[] item : queued) {
             speakNow(item[0], item[1], Float.parseFloat(item[2]), Float.parseFloat(item[3]));
         }
+    }
+
+    /** Picks an English voice that is really installed on the tablet (works offline). */
+    private String chooseInstalledEnglishVoice() {
+        try {
+            java.util.Set<Voice> voices = tts.getVoices();
+            Voice best = null;
+            int bestScore = -1;
+            if (voices != null) {
+                for (Voice v : voices) {
+                    Locale l = v.getLocale();
+                    if (l == null || !"en".equals(l.getLanguage())) continue;
+                    java.util.Set<String> f = v.getFeatures();
+                    if (f != null && f.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)) continue;
+                    int score = 0;
+                    if (!v.isNetworkConnectionRequired()) score += 100;   // works without internet
+                    String country = l.getCountry();
+                    if ("IN".equals(country)) score += 30;
+                    else if ("US".equals(country)) score += 20;
+                    else if ("GB".equals(country)) score += 10;
+                    if (score > bestScore) { best = v; bestScore = score; }
+                }
+            }
+            if (best != null && tts.setVoice(best) == TextToSpeech.SUCCESS) {
+                return best.getName() + " (" + best.getLocale()
+                        + (best.isNetworkConnectionRequired() ? ", needs internet)" : ", offline)");
+            }
+        } catch (Exception ignored) {
+            // fall back to choosing by language below
+        }
+        Locale[] locales = {new Locale("en", "IN"), Locale.US, Locale.UK};
+        for (Locale l : locales) {
+            int r = tts.setLanguage(l);
+            if (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED) {
+                return "language " + l;
+            }
+        }
+        return "no English voice installed!";
+    }
+
+    private void onVoiceStarted(String id) {
+        ttsStarted.add(id);
+        if (!ttsEngineWorks) {
+            ttsEngineWorks = true;
+            voiceDiag("voice is speaking (" + ttsEngineName + ")");
+        }
+        ttsEvent(id, "start");
+    }
+
+    private void onVoiceDone(String id) {
+        ttsPending.remove(id);
+        ttsStarted.remove(id);
+        ttsEvent(id, "done");
+    }
+
+    private void onVoiceError(String id, int code) {
+        voiceDiag("voice error " + code + " on " + ttsEngineName);
+        if (!ttsEngineWorks) {
+            nextVoiceEngine("gave an error");     // this engine never spoke - try another one
+            return;
+        }
+        ttsPending.remove(id);
+        ttsStarted.remove(id);
+        ttsEvent(id, "error");
+    }
+
+    /** The current voice engine is silent: move everything waiting to the next engine. */
+    private void nextVoiceEngine(String reason) {
+        voiceDiag(ttsEngineName + " " + reason + " - trying the next voice engine");
+        List<String[]> retry = new ArrayList<>();
+        for (java.util.Map.Entry<String, String[]> e : ttsPending.entrySet()) {
+            if (!ttsStarted.contains(e.getKey())) {
+                String[] v = e.getValue();
+                retry.add(new String[]{e.getKey(), v[0], v[1], v[2]});
+            }
+        }
+        retry.addAll(waitingToSpeak);
         waitingToSpeak.clear();
+        waitingToSpeak.addAll(retry);
+        ttsPending.clear();
+        ttsStarted.clear();
+        ttsReady = false;
+        try { if (tts != null) tts.shutdown(); } catch (Exception ignored) { }
+        tts = null;
+        ttsEngineIndex++;
+        setupTextToSpeech();
+    }
+
+    private void noVoiceWorks() {
+        ttsStatus = "NO voice engine works - check Settings > Language and input > Text-to-speech";
+        voiceDiag(ttsStatus);
+        for (String[] item : waitingToSpeak) ttsEvent(item[0], "error");
+        waitingToSpeak.clear();
+    }
+
+    private void voiceDiag(String text) {
+        speechEvent(0, "diag", text);
     }
 
     /** Makes sure the tablet's media sound is on and loud enough for Buddy's voice. */
@@ -769,24 +868,38 @@ public class MainActivity extends Activity {
     private void speak(String id, String text, float rate, float pitch) {
         muteBeep(false);
         ensureSoundOn();
-        if (!ttsReady) {
+        if (!ttsReady || tts == null) {
             waitingToSpeak.add(new String[]{id, text, String.valueOf(rate), String.valueOf(pitch)});
             return;
         }
         speakNow(id, text, rate, pitch);
     }
 
-    private void speakNow(String id, String text, float rate, float pitch) {
+    private void speakNow(final String id, String text, float rate, float pitch) {
+        ttsPending.put(id, new String[]{text, String.valueOf(rate), String.valueOf(pitch)});
         tts.setSpeechRate(rate);
         tts.setPitch(pitch);
         Bundle params = new Bundle();
         params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
         int ok = tts.speak(text, TextToSpeech.QUEUE_ADD, params, id);
-        if (ok != TextToSpeech.SUCCESS) ttsEvent(id, "error");
+        if (ok != TextToSpeech.SUCCESS) {
+            onVoiceError(id, ok);
+            return;
+        }
+        // If this engine has never spoken and stays silent, switch to the next one
+        if (!ttsEngineWorks) {
+            main.postDelayed(() -> {
+                if (!ttsEngineWorks && ttsPending.containsKey(id) && !ttsStarted.contains(id)) {
+                    nextVoiceEngine("stayed silent");
+                }
+            }, 3000);
+        }
     }
 
     private void stopSpeaking() {
         waitingToSpeak.clear();
+        ttsPending.clear();
+        ttsStarted.clear();
         if (tts != null) tts.stop();
     }
 
