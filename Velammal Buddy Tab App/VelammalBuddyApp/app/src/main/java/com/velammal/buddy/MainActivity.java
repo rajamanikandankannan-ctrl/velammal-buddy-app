@@ -9,7 +9,9 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -100,6 +102,17 @@ public class MainActivity extends Activity {
     private final java.util.LinkedHashMap<String, String[]> ttsPending = new java.util.LinkedHashMap<>();
     private final java.util.HashSet<String> ttsStarted = new java.util.HashSet<>();
     private final List<String[]> waitingToSpeak = new ArrayList<>();
+    // Buddy's voice is made into a sound file and played by the media player
+    // (the same way music and videos play), which works even when the voice
+    // engine's own sound output stays silent.
+    private static final boolean PLAY_THROUGH_MEDIA_PLAYER = true;
+    private boolean mediaPlayerFailed = false;
+    private boolean mediaPlayerUsed = false;
+    private MediaPlayer player;
+    private String playerId;
+    private int fileCounter = 0;
+    private final java.util.HashMap<String, java.io.File> voiceFiles = new java.util.HashMap<>();
+    private final java.util.ArrayDeque<String> playQueue = new java.util.ArrayDeque<>();
 
     // ------------------------------------------------------------------
     // Start-up
@@ -725,10 +738,22 @@ public class MainActivity extends Activity {
         ttsStatus = ttsEngineName + " - " + voice;
         voiceDiag("voice ready: " + ttsStatus);
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) { main.post(() -> onVoiceStarted(id)); }
-            @Override public void onDone(String id) { main.post(() -> onVoiceDone(id)); }
-            @Override public void onError(String id) { main.post(() -> onVoiceError(id, -1)); }
-            @Override public void onError(String id, int errorCode) { main.post(() -> onVoiceError(id, errorCode)); }
+            @Override public void onStart(String id) {
+                if (isFileJob(id)) return;                 // a sound file is being made
+                main.post(() -> onVoiceStarted(id));
+            }
+            @Override public void onDone(String id) {
+                if (isFileJob(id)) main.post(() -> onVoiceFileReady(id.substring(2)));
+                else main.post(() -> onVoiceDone(id));
+            }
+            @Override public void onError(String id) {
+                if (isFileJob(id)) main.post(() -> onVoiceFileFailed(id.substring(2), -1));
+                else main.post(() -> onVoiceError(id, -1));
+            }
+            @Override public void onError(String id, int errorCode) {
+                if (isFileJob(id)) main.post(() -> onVoiceFileFailed(id.substring(2), errorCode));
+                else main.post(() -> onVoiceError(id, errorCode));
+            }
         });
         ttsReady = true;
         List<String[]> queued = new ArrayList<>(waitingToSpeak);
@@ -817,6 +842,7 @@ public class MainActivity extends Activity {
         waitingToSpeak.addAll(retry);
         ttsPending.clear();
         ttsStarted.clear();
+        clearVoiceFiles();
         ttsReady = false;
         try { if (tts != null) tts.shutdown(); } catch (Exception ignored) { }
         tts = null;
@@ -835,22 +861,33 @@ public class MainActivity extends Activity {
         speechEvent(0, "diag", text);
     }
 
-    /** Makes sure the tablet's media sound is on and loud enough for Buddy's voice. */
+    private static final int[] SOUND_STREAMS = {
+            AudioManager.STREAM_MUSIC, AudioManager.STREAM_SYSTEM, AudioManager.STREAM_NOTIFICATION,
+            AudioManager.STREAM_RING, AudioManager.STREAM_ALARM, 10 /* accessibility (Android 8+) */};
+    private static final String[] SOUND_NAMES = {"media", "system", "notification", "ring", "alarm", "accessibility"};
+
+    /** Makes sure the tablet's sound is on and loud enough for Buddy's voice.
+     *  Older versions of Buddy muted the sound for a moment to hide the
+     *  microphone beep - this undoes any mute that was left behind. */
     private void ensureSoundOn() {
         if (audio == null) return;
-        try {
-            if (Build.VERSION.SDK_INT >= 23) {
-                // Undo any mute left behind by an older version of the app
-                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
+        for (int i = 0; i < SOUND_STREAMS.length; i++) {
+            if (SOUND_STREAMS[i] == 10 && Build.VERSION.SDK_INT < 26) continue;
+            try {
+                if (Build.VERSION.SDK_INT >= 23 && audio.isStreamMute(SOUND_STREAMS[i])) {
+                    audio.adjustStreamVolume(SOUND_STREAMS[i], AudioManager.ADJUST_UNMUTE, 0);
+                }
+            } catch (Exception ignored) {
+                // e.g. Do Not Disturb is on - skip this one
             }
+        }
+        try {
             int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             int now = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
             if (now < max * 0.4) {
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(max * 0.7f), 0);
             }
-        } catch (Exception ignored) {
-            // e.g. Do Not Disturb is on
-        }
+        } catch (Exception ignored) { }
     }
 
     private String soundInfo() {
@@ -858,8 +895,21 @@ public class MainActivity extends Activity {
         try {
             int max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             int now = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-            boolean muted = Build.VERSION.SDK_INT >= 23 && audio.isStreamMute(AudioManager.STREAM_MUSIC);
-            return now + "/" + max + (muted ? " MUTED" : "");
+            StringBuilder muted = new StringBuilder();
+            if (Build.VERSION.SDK_INT >= 23) {
+                for (int i = 0; i < SOUND_STREAMS.length; i++) {
+                    if (SOUND_STREAMS[i] == 10 && Build.VERSION.SDK_INT < 26) continue;
+                    try {
+                        if (audio.isStreamMute(SOUND_STREAMS[i])) {
+                            if (muted.length() > 0) muted.append(", ");
+                            muted.append(SOUND_NAMES[i]);
+                        }
+                    } catch (Exception ignored) { }
+                }
+            }
+            return now + "/" + max + (muted.length() > 0 ? " | STILL MUTED: " + muted : " | nothing muted")
+                    + " | Voice output: " + (PLAY_THROUGH_MEDIA_PLAYER && !mediaPlayerFailed
+                        ? "media player" : "voice engine");
         } catch (Exception e) {
             return "unknown";
         }
@@ -875,13 +925,51 @@ public class MainActivity extends Activity {
         speakNow(id, text, rate, pitch);
     }
 
+    private static boolean isFileJob(String id) {
+        return id != null && id.startsWith("f:");
+    }
+
     private void speakNow(final String id, String text, float rate, float pitch) {
         ttsPending.put(id, new String[]{text, String.valueOf(rate), String.valueOf(pitch)});
         tts.setSpeechRate(rate);
         tts.setPitch(pitch);
+        if (PLAY_THROUGH_MEDIA_PLAYER && !mediaPlayerFailed) {
+            java.io.File file = new java.io.File(getCacheDir(), "buddy-voice-" + (++fileCounter) + ".wav");
+            voiceFiles.put(id, file);
+            int ok;
+            try {
+                ok = tts.synthesizeToFile(text, new Bundle(), file, "f:" + id);
+            } catch (Exception e) {
+                ok = TextToSpeech.ERROR;
+            }
+            if (ok == TextToSpeech.SUCCESS) {
+                // The sound file must be ready within a few seconds
+                main.postDelayed(() -> {
+                    if (ttsPending.containsKey(id) && voiceFiles.containsKey(id)
+                            && !playQueue.contains(id) && !id.equals(playerId) && !ttsStarted.contains(id)) {
+                        voiceDiag("voice file not ready in time (" + ttsEngineName + ")");
+                        java.io.File f = voiceFiles.remove(id);
+                        if (f != null) f.delete();
+                        if (!ttsEngineWorks) nextVoiceEngine("stayed silent");
+                        else speakDirect(id);
+                    }
+                }, 8000);
+                return;
+            }
+            voiceFiles.remove(id);
+            file.delete();
+            voiceDiag("could not make a voice file - speaking directly");
+        }
+        speakDirect(id);
+    }
+
+    /** The voice engine plays the sound itself (the older way). */
+    private void speakDirect(final String id) {
+        String[] item = ttsPending.get(id);
+        if (item == null || tts == null) return;
         Bundle params = new Bundle();
         params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
-        int ok = tts.speak(text, TextToSpeech.QUEUE_ADD, params, id);
+        int ok = tts.speak(item[0], TextToSpeech.QUEUE_ADD, params, id);
         if (ok != TextToSpeech.SUCCESS) {
             onVoiceError(id, ok);
             return;
@@ -896,10 +984,116 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** The sound file for one sentence is ready - play it. */
+    private void onVoiceFileReady(String id) {
+        java.io.File file = voiceFiles.get(id);
+        if (!ttsPending.containsKey(id) || file == null) {      // cancelled meanwhile
+            if (file != null) { voiceFiles.remove(id); file.delete(); }
+            return;
+        }
+        if (!file.exists() || file.length() < 200) {
+            voiceDiag("voice file was empty (" + ttsEngineName + ")");
+            voiceFiles.remove(id);
+            file.delete();
+            if (!ttsEngineWorks) nextVoiceEngine("made no sound");
+            else speakDirect(id);
+            return;
+        }
+        playQueue.add(id);
+        playNextVoiceFile();
+    }
+
+    private void onVoiceFileFailed(String id, int code) {
+        java.io.File file = voiceFiles.remove(id);
+        if (file != null) file.delete();
+        if (!ttsPending.containsKey(id)) return;                // cancelled meanwhile
+        voiceDiag("could not make voice file, error " + code + " (" + ttsEngineName + ")");
+        if (!ttsEngineWorks) nextVoiceEngine("gave an error");
+        else speakDirect(id);
+    }
+
+    private void playNextVoiceFile() {
+        if (player != null) return;
+        final String id = playQueue.poll();
+        if (id == null) return;
+        final java.io.File file = voiceFiles.remove(id);
+        if (!ttsPending.containsKey(id) || file == null) {
+            if (file != null) file.delete();
+            playNextVoiceFile();
+            return;
+        }
+        MediaPlayer mp = new MediaPlayer();
+        try {
+            if (Build.VERSION.SDK_INT >= 21) {
+                mp.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build());
+            } else {
+                mp.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            }
+            mp.setVolume(1f, 1f);
+            mp.setDataSource(file.getAbsolutePath());
+            mp.setOnCompletionListener(m -> finishVoiceFile(id, file, true));
+            mp.setOnErrorListener((m, what, extra) -> {
+                voiceDiag("media player error " + what + "/" + extra);
+                finishVoiceFile(id, file, false);
+                return true;
+            });
+            mp.prepare();
+            player = mp;
+            playerId = id;
+            mp.start();
+            if (!mediaPlayerUsed) {
+                mediaPlayerUsed = true;
+                voiceDiag("playing Buddy's voice through the media player ("
+                        + (file.length() / 1024) + " KB)");
+            }
+            onVoiceStarted(id);
+        } catch (Exception e) {
+            voiceDiag("media player failed: " + e.getMessage() + " - speaking directly");
+            try { mp.release(); } catch (Exception ignored) { }
+            player = null;
+            playerId = null;
+            file.delete();
+            mediaPlayerFailed = true;
+            speakDirect(id);
+        }
+    }
+
+    private void finishVoiceFile(String id, java.io.File file, boolean ok) {
+        if (player != null) {
+            try { player.release(); } catch (Exception ignored) { }
+        }
+        player = null;
+        playerId = null;
+        file.delete();
+        if (ok) {
+            onVoiceDone(id);
+        } else if (ttsPending.containsKey(id)) {
+            mediaPlayerFailed = true;
+            speakDirect(id);
+        }
+        playNextVoiceFile();
+    }
+
+    private void clearVoiceFiles() {
+        playQueue.clear();
+        if (player != null) {
+            try { player.stop(); } catch (Exception ignored) { }
+            try { player.release(); } catch (Exception ignored) { }
+        }
+        player = null;
+        playerId = null;
+        for (java.io.File f : voiceFiles.values()) f.delete();
+        voiceFiles.clear();
+    }
+
     private void stopSpeaking() {
         waitingToSpeak.clear();
         ttsPending.clear();
         ttsStarted.clear();
+        clearVoiceFiles();
         if (tts != null) tts.stop();
     }
 
@@ -1013,6 +1207,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         muteBeep(false);
         stopVosk();
+        clearVoiceFiles();
         resetRecognizer();
         if (tts != null) {
             tts.stop();
