@@ -113,6 +113,16 @@ public class MainActivity extends Activity {
     private int fileCounter = 0;
     private final java.util.HashMap<String, java.io.File> voiceFiles = new java.util.HashMap<>();
     private final java.util.ArrayDeque<String> playQueue = new java.util.ArrayDeque<>();
+    private final java.util.HashMap<String, java.io.File> partFiles = new java.util.HashMap<>();
+
+    // Saved voices: every fixed answer is turned into a sound file once and
+    // kept on the tablet, so Buddy can answer instantly next time.
+    private final java.util.ArrayDeque<String[]> prepQueue = new java.util.ArrayDeque<>();
+    private int prepTotal = 0;
+    private int prepSaved = 0;
+    private String prepId = null;
+    private java.io.File prepPart, prepFinal;
+    private boolean prepAnnounced = false;
 
     // ------------------------------------------------------------------
     // Start-up
@@ -739,23 +749,27 @@ public class MainActivity extends Activity {
         voiceDiag("voice ready: " + ttsStatus);
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String id) {
-                if (isFileJob(id)) return;                 // a sound file is being made
+                if (isFileJob(id) || isPrepJob(id)) return;   // a sound file is being made
                 main.post(() -> onVoiceStarted(id));
             }
             @Override public void onDone(String id) {
+                if (isPrepJob(id)) { main.post(() -> onPrepFinished(id, true)); return; }
                 if (isFileJob(id)) main.post(() -> onVoiceFileReady(id.substring(2)));
                 else main.post(() -> onVoiceDone(id));
             }
             @Override public void onError(String id) {
+                if (isPrepJob(id)) { main.post(() -> onPrepFinished(id, false)); return; }
                 if (isFileJob(id)) main.post(() -> onVoiceFileFailed(id.substring(2), -1));
                 else main.post(() -> onVoiceError(id, -1));
             }
             @Override public void onError(String id, int errorCode) {
+                if (isPrepJob(id)) { main.post(() -> onPrepFinished(id, false)); return; }
                 if (isFileJob(id)) main.post(() -> onVoiceFileFailed(id.substring(2), errorCode));
                 else main.post(() -> onVoiceError(id, errorCode));
             }
         });
         ttsReady = true;
+        main.postDelayed(this::prepNext, 1500);   // carry on saving voices
         List<String[]> queued = new ArrayList<>(waitingToSpeak);
         waitingToSpeak.clear();
         for (String[] item : queued) {
@@ -843,6 +857,7 @@ public class MainActivity extends Activity {
         ttsPending.clear();
         ttsStarted.clear();
         clearVoiceFiles();
+        cancelPrepJob();
         ttsReady = false;
         try { if (tts != null) tts.shutdown(); } catch (Exception ignored) { }
         tts = null;
@@ -929,35 +944,69 @@ public class MainActivity extends Activity {
         return id != null && id.startsWith("f:");
     }
 
+    private static boolean isPrepJob(String id) {
+        return id != null && id.startsWith("p:");
+    }
+
+    /** Where the saved voice for this sentence lives (depends on voice, speed and pitch). */
+    private java.io.File savedVoiceFile(String text, String rate, String pitch) {
+        java.io.File dir = new java.io.File(getFilesDir(), "voice-cache");
+        if (!dir.exists()) dir.mkdirs();
+        String key = ttsStatus + "|" + rate + "|" + pitch + "|" + text;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] hash = md.digest(key.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return new java.io.File(dir, sb.toString() + ".wav");
+        } catch (Exception e) {
+            return new java.io.File(dir, Integer.toHexString(key.hashCode()) + ".wav");
+        }
+    }
+
+    private static boolean isGoodVoiceFile(java.io.File f) {
+        return f != null && f.exists() && f.length() > 200;
+    }
+
     private void speakNow(final String id, String text, float rate, float pitch) {
         ttsPending.put(id, new String[]{text, String.valueOf(rate), String.valueOf(pitch)});
         tts.setSpeechRate(rate);
         tts.setPitch(pitch);
         if (PLAY_THROUGH_MEDIA_PLAYER && !mediaPlayerFailed) {
-            java.io.File file = new java.io.File(getCacheDir(), "buddy-voice-" + (++fileCounter) + ".wav");
-            voiceFiles.put(id, file);
+            java.io.File saved = savedVoiceFile(text, String.valueOf(rate), String.valueOf(pitch));
+            if (isGoodVoiceFile(saved)) {                    // already saved - play at once
+                voiceFiles.put(id, saved);
+                playQueue.add(id);
+                playNextVoiceFile();
+                return;
+            }
+            java.io.File part = new java.io.File(saved.getPath() + "." + (++fileCounter) + ".part");
+            voiceFiles.put(id, saved);
+            partFiles.put(id, part);
             int ok;
             try {
-                ok = tts.synthesizeToFile(text, new Bundle(), file, "f:" + id);
+                ok = tts.synthesizeToFile(text, new Bundle(), part, "f:" + id);
             } catch (Exception e) {
                 ok = TextToSpeech.ERROR;
             }
             if (ok == TextToSpeech.SUCCESS) {
                 // The sound file must be ready within a few seconds
                 main.postDelayed(() -> {
-                    if (ttsPending.containsKey(id) && voiceFiles.containsKey(id)
+                    if (ttsPending.containsKey(id) && partFiles.containsKey(id)
                             && !playQueue.contains(id) && !id.equals(playerId) && !ttsStarted.contains(id)) {
                         voiceDiag("voice file not ready in time (" + ttsEngineName + ")");
-                        java.io.File f = voiceFiles.remove(id);
+                        voiceFiles.remove(id);
+                        java.io.File f = partFiles.remove(id);
                         if (f != null) f.delete();
                         if (!ttsEngineWorks) nextVoiceEngine("stayed silent");
                         else speakDirect(id);
                     }
-                }, 8000);
+                }, ttsEngineWorks ? 15000 : 8000);
                 return;
             }
             voiceFiles.remove(id);
-            file.delete();
+            partFiles.remove(id);
+            part.delete();
             voiceDiag("could not make a voice file - speaking directly");
         }
         speakDirect(id);
@@ -987,14 +1036,21 @@ public class MainActivity extends Activity {
     /** The sound file for one sentence is ready - play it. */
     private void onVoiceFileReady(String id) {
         java.io.File file = voiceFiles.get(id);
+        java.io.File part = partFiles.remove(id);
+        if (part != null && file != null && isGoodVoiceFile(part)) {
+            file.delete();
+            if (!part.renameTo(file)) file = part;      // keep using it even if it can't be renamed
+            voiceFiles.put(id, file);
+        }
         if (!ttsPending.containsKey(id) || file == null) {      // cancelled meanwhile
-            if (file != null) { voiceFiles.remove(id); file.delete(); }
+            voiceFiles.remove(id);
             return;
         }
-        if (!file.exists() || file.length() < 200) {
+        if (!isGoodVoiceFile(file)) {
             voiceDiag("voice file was empty (" + ttsEngineName + ")");
             voiceFiles.remove(id);
             file.delete();
+            if (part != null) part.delete();
             if (!ttsEngineWorks) nextVoiceEngine("made no sound");
             else speakDirect(id);
             return;
@@ -1004,8 +1060,9 @@ public class MainActivity extends Activity {
     }
 
     private void onVoiceFileFailed(String id, int code) {
-        java.io.File file = voiceFiles.remove(id);
-        if (file != null) file.delete();
+        voiceFiles.remove(id);
+        java.io.File part = partFiles.remove(id);
+        if (part != null) part.delete();
         if (!ttsPending.containsKey(id)) return;                // cancelled meanwhile
         voiceDiag("could not make voice file, error " + code + " (" + ttsEngineName + ")");
         if (!ttsEngineWorks) nextVoiceEngine("gave an error");
@@ -1018,7 +1075,6 @@ public class MainActivity extends Activity {
         if (id == null) return;
         final java.io.File file = voiceFiles.remove(id);
         if (!ttsPending.containsKey(id) || file == null) {
-            if (file != null) file.delete();
             playNextVoiceFile();
             return;
         }
@@ -1055,7 +1111,7 @@ public class MainActivity extends Activity {
             try { mp.release(); } catch (Exception ignored) { }
             player = null;
             playerId = null;
-            file.delete();
+            file.delete();                                  // damaged - make it again next time
             mediaPlayerFailed = true;
             speakDirect(id);
         }
@@ -1067,7 +1123,7 @@ public class MainActivity extends Activity {
         }
         player = null;
         playerId = null;
-        file.delete();
+        if (!ok) file.delete();                             // keep good voices for next time
         if (ok) {
             onVoiceDone(id);
         } else if (ttsPending.containsKey(id)) {
@@ -1085,8 +1141,114 @@ public class MainActivity extends Activity {
         }
         player = null;
         playerId = null;
-        for (java.io.File f : voiceFiles.values()) f.delete();
+        for (java.io.File f : partFiles.values()) f.delete();   // unfinished files only
+        partFiles.clear();
         voiceFiles.clear();
+    }
+
+    /** The page sends every fixed sentence Buddy can say; they are saved one by one. */
+    private void prepareVoices(String json, float rate, float pitch) {
+        prepQueue.clear();
+        prepTotal = 0;
+        prepSaved = 0;
+        prepAnnounced = false;
+        try {
+            JSONArray list = new JSONArray(json);
+            for (int i = 0; i < list.length(); i++) {
+                String text = list.optString(i, "").trim();
+                if (text.isEmpty()) continue;
+                prepQueue.add(new String[]{text, String.valueOf(rate), String.valueOf(pitch)});
+                prepTotal++;
+            }
+        } catch (Exception e) {
+            voiceDiag("could not read the answers to save");
+            return;
+        }
+        main.postDelayed(this::prepNext, 2000);
+    }
+
+    /** Saves the next voice - only while Buddy is quiet, so it never slows him down. */
+    private void prepNext() {
+        if (prepId != null || !ttsReady || tts == null) return;
+        if (!PLAY_THROUGH_MEDIA_PLAYER || mediaPlayerFailed) return;
+        if (!ttsPending.isEmpty() || player != null || !waitingToSpeak.isEmpty()) {
+            main.postDelayed(this::prepNext, 1000);
+            return;
+        }
+        while (true) {
+            String[] job = prepQueue.peek();
+            if (job == null) {
+                if (!prepAnnounced && prepTotal > 0) {
+                    prepAnnounced = true;
+                    voiceDiag("all " + prepTotal + " answers saved as voice - Buddy answers instantly");
+                }
+                return;
+            }
+            java.io.File saved = savedVoiceFile(job[0], job[1], job[2]);
+            if (isGoodVoiceFile(saved)) {           // already saved earlier
+                prepQueue.poll();
+                prepSaved++;
+                continue;
+            }
+            if (prepSaved == 0 || prepSaved % 10 == 0) {
+                voiceDiag("saving answers as voice: " + prepSaved + " of " + prepTotal + " done");
+            }
+            final String id = "p:" + (++fileCounter);
+            prepFinal = saved;
+            prepPart = new java.io.File(saved.getPath() + "." + fileCounter + ".part");
+            prepId = id;
+            tts.setSpeechRate(Float.parseFloat(job[1]));
+            tts.setPitch(Float.parseFloat(job[2]));
+            int ok;
+            try {
+                ok = tts.synthesizeToFile(job[0], new Bundle(), prepPart, id);
+            } catch (Exception e) {
+                ok = TextToSpeech.ERROR;
+            }
+            if (ok != TextToSpeech.SUCCESS) {
+                cancelPrepJob();
+                prepQueue.poll();                    // skip this one
+                main.postDelayed(this::prepNext, 1000);
+                return;
+            }
+            main.postDelayed(() -> {                 // never wait forever for one sentence
+                if (id.equals(prepId)) {
+                    cancelPrepJob();
+                    prepQueue.poll();
+                    prepNext();
+                }
+            }, 25000);
+            return;
+        }
+    }
+
+    private void onPrepFinished(String id, boolean ok) {
+        if (!id.equals(prepId)) return;
+        java.io.File part = prepPart, fin = prepFinal;
+        prepId = null;
+        prepPart = null;
+        prepFinal = null;
+        prepQueue.poll();
+        if (ok && isGoodVoiceFile(part)) {
+            fin.delete();
+            if (part.renameTo(fin)) prepSaved++;
+            else part.delete();
+        } else if (part != null) {
+            part.delete();
+        }
+        main.postDelayed(this::prepNext, 150);
+    }
+
+    private void cancelPrepJob() {
+        if (prepPart != null) prepPart.delete();
+        prepId = null;
+        prepPart = null;
+        prepFinal = null;
+    }
+
+    private String savedVoicesInfo() {
+        if (prepTotal == 0) return "not started";
+        return prepSaved + " of " + prepTotal + (prepQueue.isEmpty() ? " (all ready)" : " (saving…)");
     }
 
     private void stopSpeaking() {
@@ -1095,6 +1257,10 @@ public class MainActivity extends Activity {
         ttsStarted.clear();
         clearVoiceFiles();
         if (tts != null) tts.stop();
+        if (prepId != null) {                        // tts.stop() also ended the saving job
+            cancelPrepJob();
+            main.postDelayed(this::prepNext, 1500);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1123,6 +1289,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void prepareVoices(final String jsonArrayOfSentences, final double rate, final double pitch) {
+            main.post(() -> MainActivity.this.prepareVoices(jsonArrayOfSentences, (float) rate, (float) pitch));
+        }
+
+        @JavascriptInterface
         public void stopSpeaking() {
             main.post(MainActivity.this::stopSpeaking);
         }
@@ -1146,6 +1317,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getSpeechInfo() {
             return "Voice: " + ttsStatus
+                    + " | Saved voices: " + savedVoicesInfo()
                     + " | Media volume: " + soundInfo()
                     + " | Built-in engine: " + voskStatus
                     + " | Google engine: " + recognizerName
