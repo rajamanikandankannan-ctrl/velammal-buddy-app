@@ -206,6 +206,24 @@ body.rehearsed-mode .rehearsed-dot { display: block; }
 .demo-toggle.on .demo-switch i { transform: translateX(12px); }
 .demo-step { font-size: 0.62rem; opacity: 0.75; }
 .demo-step:empty { display: none; }
+/* Demo mode: numbered question bubbles under the top bar */
+.demo-chips {
+  display: none; position: relative; z-index: 5; flex: 0 0 auto;
+  justify-content: center; gap: 10px; padding: 0 16px 6px;
+}
+body.demo-mode .demo-chips { display: flex; }
+.demo-chip {
+  width: 40px; height: 40px; border-radius: 50%; border: 0;
+  font: inherit; font-size: 1rem; font-weight: 900;
+  color: #b45309; background: rgba(245, 158, 11, 0.16);
+  box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.35);
+  cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s, background 0.25s, color 0.25s;
+}
+.demo-chip:active { transform: scale(0.92); }
+.demo-chip.done { opacity: 0.55; }
+.demo-chip.next { background: #f59e0b; color: #fff; box-shadow: 0 4px 12px rgba(245, 158, 11, 0.45); }
+
 /* In the app the demo switch takes the place of the Online/Offline pill */
 .app-bar .demo-toggle ~ .pill { display: none; }
 .app-bar .brand { overflow: hidden; }

@@ -67,6 +67,8 @@ const CONFIG = {
   //  16 Chief Minister, 17 goodbye - then the other questions.
   demoOrder: [1, 2, 12, 16, 17, 13, 14, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   demoModeOnStart: true,
+  demoListenMs: 3000,            // after a tap, Buddy listens this long, then answers
+  demoBubbles: 5,                // numbered bubbles at the top (first 5 questions)
   rehearsedStartDelayMs: 900,    // wait before the question starts appearing
   rehearsedWordDelayMs: 320,     // speed at which the question "types" itself
 
@@ -1080,6 +1082,55 @@ function answerNextDemo() {
   respondToItem(item);
 }
 
+/** Demo: Buddy "listens" for a few seconds, then answers the next question.
+ *  He does not keep listening afterwards - Gugan taps for each question. */
+function startDemoListening() {
+  stopSpeaking();
+  endConversation();
+  abortListening();
+  cancelRehearsed();
+  setMode("listening");
+  startLiveKidMessage();
+  const session = state.rehearsedSession;
+  state.rehearsedTimer = setTimeout(function () {
+    if (session !== state.rehearsedSession || state.mode !== "listening") return;
+    answerNextDemo();
+  }, CONFIG.demoListenMs);
+}
+
+/** Numbered bubble tapped: answer exactly that question now. */
+function answerDemoNumber(position) {
+  endConversation();
+  cancelRehearsed();
+  abortListening();
+  stopSpeaking();
+  if (!state.liveMsgEl) startLiveKidMessage();
+  state.quiz.active = false;
+  state.demoIndex = position;
+  answerNextDemo();
+}
+
+function buildDemoBubbles() {
+  if (!els.demoChips) return;
+  els.demoChips.innerHTML = "";
+  const count = Math.min(CONFIG.demoBubbles, CONFIG.demoOrder.length);
+  for (let i = 0; i < count; i++) {
+    const item = knowledgeBase.find(function (q) { return q.id === CONFIG.demoOrder[i]; });
+    if (!item) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "demo-chip";
+    button.textContent = String(i + 1);
+    button.title = item.question;
+    button.setAttribute("aria-label", "Question " + (i + 1) + ": " + item.question);
+    button.addEventListener("click", function (event) {
+      event.stopPropagation();
+      answerDemoNumber(i);
+    });
+    els.demoChips.appendChild(button);
+  }
+}
+
 function updateDemoToggle() {
   if (!els.demoToggle) return;
   els.demoToggle.classList.toggle("on", state.demoMode);
@@ -1087,6 +1138,13 @@ function updateDemoToggle() {
   els.demoToggleState.textContent = state.demoMode ? "ON" : "OFF";
   els.demoToggleStep.textContent = state.demoMode
     ? "Q" + ((state.demoIndex % CONFIG.demoOrder.length) + 1) : "";
+  if (els.demoChips) {
+    const next = state.demoIndex % CONFIG.demoOrder.length;
+    Array.prototype.forEach.call(els.demoChips.children, function (chip, i) {
+      chip.classList.toggle("next", i === next);
+      chip.classList.toggle("done", i < next);
+    });
+  }
 }
 
 function setDemoMode(on) {
@@ -1610,11 +1668,8 @@ function onTalkButton() {
     return;
   }
 
-  if (state.demoMode && (state.demoNoMic || !state.recognitionSupported)) {
-    // Listening failed last time: tap = next question, then try listening again
-    state.demoNoMic = false;
-    startConversation();
-    answerNextDemo();
+  if (state.demoMode && !state.quiz.active) {
+    startDemoListening();              // listen 3 s, then answer the next question
     return;
   }
 
@@ -1846,8 +1901,9 @@ function init() {
     "chat", "talkButton", "talkLabel", "pillText", "clock", "splash",
     "devPanel", "devClose", "devInfo", "devQuestions", "devRehearsed",
     "devNext", "devTestVoice", "devResetOrder", "devStop", "devQuizRight", "devQuizWrong", "devInstall",
-    "demoToggle", "demoToggleState", "demoToggleStep"
+    "demoToggle", "demoToggleState", "demoToggleStep", "demoChips"
   ].forEach(function (id) { els[id] = document.getElementById(id); });
+  buildDemoBubbles();
 
   if (els.demoToggle) {
     els.demoToggle.addEventListener("click", function (event) {
