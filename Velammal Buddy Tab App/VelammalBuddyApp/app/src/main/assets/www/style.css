@@ -183,6 +183,34 @@ body[data-state="speaking"] .pill { background: rgba(79, 70, 229, 0.12); color: 
 }
 body.rehearsed-mode .rehearsed-dot { display: block; }
 
+/* Demo mode switch (top of the main screen) */
+.demo-toggle {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px 6px 6px; border: 0; border-radius: 999px;
+  font: inherit; font-size: 0.72rem; font-weight: 900; color: #6b7280;
+  background: rgba(107, 114, 128, 0.12);
+  cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  transition: background 0.25s, color 0.25s;
+}
+.demo-switch {
+  position: relative; width: 30px; height: 18px; border-radius: 999px;
+  background: #cbd5e1; transition: background 0.25s;
+}
+.demo-switch i {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 0.25s;
+}
+.demo-toggle.on { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.demo-toggle.on .demo-switch { background: #f59e0b; }
+.demo-toggle.on .demo-switch i { transform: translateX(12px); }
+.demo-step { font-size: 0.62rem; opacity: 0.75; }
+.demo-step:empty { display: none; }
+/* In the app the demo switch takes the place of the Online/Offline pill */
+.app-bar .demo-toggle ~ .pill { display: none; }
+.app-bar .brand { overflow: hidden; }
+.app-bar .brand-name, .app-bar .brand-tagline { overflow: hidden; text-overflow: ellipsis; }
+
 /* =========================================================================
    HERO (robot + status)
    ========================================================================= */

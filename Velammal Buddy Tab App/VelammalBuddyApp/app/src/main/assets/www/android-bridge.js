@@ -92,7 +92,12 @@
     log("sent " + (list.length - 1) + " words to the built-in engine");
   }
 
+  function demoModeOn() {
+    try { return typeof state !== "undefined" && !!state.demoMode; } catch (e) { return false; }
+  }
+
   function usePopup() {
+    if (demoModeOn()) return false;          // demo mode never opens Google's pop-up
     return listenMode === "popup" || (listenMode === "auto" && serviceWorks === false);
   }
 
@@ -168,7 +173,7 @@
       if (!rec._running || rec._gotReady || rec._id !== currentId) return;
       log("engine did not answer in " + (START_TIMEOUT_MS / 1000) + " s");
       bridge.abortListening();
-      if (listenMode === "auto") {
+      if (listenMode === "auto" && !demoModeOn()) {
         // Switch to Google's pop-up for the rest of the session
         serviceWorks = false;
         log("switching to Google pop-up");
@@ -338,6 +343,67 @@
       else if (u.onerror) u.onerror({ error: "synthesis-failed" });
     }
   };
+
+  /* ---------------- SAVED VOICES ----------------
+     Every fixed sentence Buddy can say (answers, quiz lines, messages) is sent
+     to the app once. The app records each one in the tablet's voice in the
+     background and keeps it, so next time Buddy answers instantly. */
+  function voiceSentences() {
+    var seen = {};
+    var list = [];
+    function add(text) {
+      if (!text || typeof text !== "string" || typeof splitIntoSentences !== "function") return;
+      splitIntoSentences(text).forEach(function (s) {
+        s = String(s).trim();
+        if (s && !seen[s]) { seen[s] = true; list.push(s); }
+      });
+    }
+    try {
+      var name = typeof STUDENT_NAME !== "undefined" ? STUDENT_NAME : "Gugan";
+      // Presentation order first, so those are ready soonest
+      var items = (typeof questionsInPresentationOrder === "function")
+        ? questionsInPresentationOrder() : (typeof knowledgeBase !== "undefined" ? knowledgeBase : []);
+      items.forEach(function (item) { add(item.answer); });
+      if (typeof knowledgeBase !== "undefined") knowledgeBase.forEach(function (item) { add(item.answer); });
+      add("Hello " + name + "! I am Velammal Buddy. I am ready to help you learn.");
+      if (typeof CONFIG !== "undefined" && CONFIG.messages) {
+        Object.keys(CONFIG.messages).forEach(function (k) { add(CONFIG.messages[k]); });
+      }
+      if (typeof quizQuestions !== "undefined") {
+        var n = Math.min(typeof QUIZ_LENGTH !== "undefined" ? QUIZ_LENGTH : 3, quizQuestions.length);
+        add("Yes! Let's do a maths quiz. I will ask you " + n + " questions.");
+        quizQuestions.forEach(function (q) {
+          for (var i = 1; i <= n; i++) add("Question " + i + ": " + q.question);
+          add(q.explain);
+          add("Good try! The answer is " + q.answer + ".");
+          add("Hmm, I didn't hear a number. " + q.question);
+        });
+        ["Correct! ", "Well done, that's right! ", "Super! You got it! "].forEach(add);
+        for (var s = 0; s <= n; s++) {
+          add("Quiz finished! You got " + s + " out of " + n + ".");
+          add("Okay, we stopped the quiz. You got " + s + " out of " + s + ".");
+          for (var t = s; t <= n; t++) add("You got " + s + " out of " + t + ".");
+        }
+        add("You are a maths star, " + name + "!");
+        add("Great effort! Practice makes perfect.");
+        add("Let's practise together and try again soon. You can do it!");
+        add("You can ask me for a quiz any time!");
+        add("Let's pause the quiz.");
+      }
+    } catch (e) { /* send what we have */ }
+    return list;
+  }
+
+  function sendVoicesToSave() {
+    if (typeof bridge.prepareVoices !== "function") return;
+    var list = voiceSentences();
+    if (!list.length) return;
+    var rate = (typeof CONFIG !== "undefined" && CONFIG.speechRate) || 1;
+    var pitch = (typeof CONFIG !== "undefined" && CONFIG.speechPitch) || 1;
+    bridge.prepareVoices(JSON.stringify(list), Number(rate), Number(pitch));
+    log("asked the app to save " + list.length + " sentences as voice");
+  }
+  window.addEventListener("load", function () { setTimeout(sendVoicesToSave, 1500); });
 
   try {
     Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true, writable: true });

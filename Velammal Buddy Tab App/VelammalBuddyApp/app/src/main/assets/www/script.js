@@ -61,6 +61,12 @@ const CONFIG = {
   // can't understand (or listening isn't possible) does he answer the next
   // question in the order above. Set to false to never use the microphone.
   rehearsedListens: true,
+  // DEMO MODE (switch at the top of the screen, ON when the app opens):
+  // whatever Gugan says, Buddy shows the next question below and answers it.
+  //  1 plants & sunlight, 2 "I goed to the park", 12 biryani,
+  //  16 Chief Minister, 17 goodbye - then the other questions.
+  demoOrder: [1, 2, 12, 16, 17, 13, 14, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  demoModeOnStart: true,
   rehearsedStartDelayMs: 900,    // wait before the question starts appearing
   rehearsedWordDelayMs: 320,     // speed at which the question "types" itself
 
@@ -426,6 +432,8 @@ const state = {
   statusResetTimer: null,
   devOpen: false,
 
+  demoMode: false,
+  demoIndex: 0,                 // next question in CONFIG.demoOrder
   rehearsedMode: false,
   rehearsedIndex: 0,
   rehearsedSession: 0,
@@ -500,6 +508,13 @@ function setStatus(message, isError) {
 
 /** Show a friendly problem message, then go back to the greeting. */
 function showFriendlyError(message) {
+  if (state.demoMode && state.mode === "listening") {
+    endConversation();
+    discardLiveMessage();
+    setMode("idle", "Tap the button for the next question!");
+    state.demoNoMic = true;
+    return;
+  }
   if (state.rehearsedMode && state.rehearsedListening && state.mode === "listening") {
     // Listening failed (no internet, no microphone...) - keep the show going
     state.rehearsedListening = false;
@@ -720,7 +735,7 @@ function setupRecognition() {
     transcript = transcript.trim();
     if (!transcript) return;
     state.lastTranscript = transcript;
-    updateLiveKidMessage(transcript);
+    if (!state.demoMode) updateLiveKidMessage(transcript);
 
     if (isFinal && !state.gotFinalResult) {
       state.gotFinalResult = true;
@@ -995,6 +1010,10 @@ function abortListening() {
 
 /** Find the answer for what was heard (tries every guess the browser gave). */
 function handleQuestion(transcript, alternatives) {
+  if (state.demoMode && !state.quiz.active) {
+    answerNextDemo();
+    return;
+  }
   const candidates = (alternatives || []).concat([transcript]).filter(Boolean);
   let match = null;
   let shownText = transcript;
@@ -1040,6 +1059,42 @@ function handleQuestion(transcript, alternatives) {
     }
   }
   respondToItem(match);
+}
+
+/* ---- DEMO MODE ---- */
+
+function getDemoItem() {
+  const order = CONFIG.demoOrder;
+  const id = order[state.demoIndex % order.length];
+  return knowledgeBase.find(function (q) { return q.id === id; }) || knowledgeBase[0];
+}
+
+/** Shows the next demo question as Gugan's question and answers it. */
+function answerNextDemo() {
+  abortListening();
+  cancelRehearsed();
+  const item = getDemoItem();
+  state.demoIndex++;
+  updateDemoToggle();
+  commitKidMessage(item.question);
+  respondToItem(item);
+}
+
+function updateDemoToggle() {
+  if (!els.demoToggle) return;
+  els.demoToggle.classList.toggle("on", state.demoMode);
+  els.demoToggle.setAttribute("aria-pressed", state.demoMode ? "true" : "false");
+  els.demoToggleState.textContent = state.demoMode ? "ON" : "OFF";
+  els.demoToggleStep.textContent = state.demoMode
+    ? "Q" + ((state.demoIndex % CONFIG.demoOrder.length) + 1) : "";
+}
+
+function setDemoMode(on) {
+  state.demoMode = on;
+  state.demoIndex = 0;                 // always start again from question 1
+  state.demoNoMic = false;
+  document.body.classList.toggle("demo-mode", on);
+  updateDemoToggle();
 }
 
 /** After Gugan asks a question from the script, the "next" one follows it. */
@@ -1528,6 +1583,11 @@ function cancelRehearsed() {
 function onTalkButton() {
   warmUpSpeech();
 
+  if (state.mode === "listening" && state.demoMode && !state.quiz.active) {
+    answerNextDemo();                  // tap while listening = next question
+    return;
+  }
+
   if (state.mode === "listening") {
     if (state.rehearsedMode) {
       // Tap while Buddy is listening = answer the next question in the order
@@ -1547,6 +1607,14 @@ function onTalkButton() {
     endConversation();
     stopSpeaking();
     setMode("idle");
+    return;
+  }
+
+  if (state.demoMode && (state.demoNoMic || !state.recognitionSupported)) {
+    // Listening failed last time: tap = next question, then try listening again
+    state.demoNoMic = false;
+    startConversation();
+    answerNextDemo();
     return;
   }
 
@@ -1777,8 +1845,18 @@ function init() {
     "logoWrap", "schoolLogo", "robotImage", "statusBubble", "statusText",
     "chat", "talkButton", "talkLabel", "pillText", "clock", "splash",
     "devPanel", "devClose", "devInfo", "devQuestions", "devRehearsed",
-    "devNext", "devTestVoice", "devResetOrder", "devStop", "devQuizRight", "devQuizWrong", "devInstall"
+    "devNext", "devTestVoice", "devResetOrder", "devStop", "devQuizRight", "devQuizWrong", "devInstall",
+    "demoToggle", "demoToggleState", "demoToggleStep"
   ].forEach(function (id) { els[id] = document.getElementById(id); });
+
+  if (els.demoToggle) {
+    els.demoToggle.addEventListener("click", function (event) {
+      event.stopPropagation();
+      resetToIdle();
+      setDemoMode(!state.demoMode);
+    });
+  }
+  setDemoMode(!!CONFIG.demoModeOnStart && !!els.demoToggle);
 
   setupLiteMode();
   registerOfflineSupport();
